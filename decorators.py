@@ -92,13 +92,24 @@ def BuildCommands(cls):
                 add_to=cls.command_map
                 while ":" in command:
                     sstem,stem,command=prep_part(command)
-                    add_to.setdefault(stem,dict())
+                    if isinstance(add_to.get(stem,None),str):
+                        add_to[stem]={"_":add_to[stem]}
+                    if isinstance(add_to.get(sstem,None),str):
+                        add_to[sstem]=add_to[stem]                        
+                    add_to.setdefault(stem,{"_":""})
                     add_to.setdefault(sstem,add_to[stem])
                     add_to=add_to[stem]
                 command,long_command,_=prep_part(command)
                 command,_=prep_plist(command)
-                add_to[command]=name
-                add_to[long_command]=name
+                long_command,_=prep_plist(long_command)                
+                if command in add_to and isinstance(add_to[command],dict):
+                    add_to[command]["_"]=name
+                else:
+                    add_to[command]=name
+                if long_command in add_to and isinstance(add_to[long_command],dict):
+                    add_to[long_command]["_"]=name
+                else:
+                    add_to[long_command]=name
     return cls
 
 class Executable(object):

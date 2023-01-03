@@ -72,6 +72,8 @@ class Instrument(object):
                 cmd = await self.ainput()
                 try:
                     cmd_runner,plist=self.parse_cmd(cmd)
+                    if isinstance(cmd_runner,dict):
+                        cmd_runner=cmd_runner.get("_",None)
                     if cmd_runner is None:
                         raise CommandError
                     cmd_runner=getattr(self,cmd_runner)
