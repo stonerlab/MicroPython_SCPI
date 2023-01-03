@@ -5,7 +5,9 @@ __all__=["SCPIError",
          "DataTypeError",
          "TooFewParameters",
          "TooManyParameters",
-         "InstrumentBusy"]
+         "InstrumentBusy",
+         "ParameterDataOutOfRange",
+         ]
 
 class SCPIError(TypeError):
     code=0
@@ -35,3 +37,6 @@ class InstrumentBusy(SCPIError):
     code=-200
     message="Instrument busy"
 
+class ParameterDataOutOfRange(SCPIError):
+    code=-222
+    message="Parameter Out of Range"

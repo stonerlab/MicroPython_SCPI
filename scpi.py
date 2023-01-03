@@ -3,6 +3,14 @@ import sys
 from decorators import BuildCommands, Command, prep_plist
 from exceptions import SCPIError, CommandError
 
+def OnOffFloat(value):
+    value=value.upper()
+    if value in ["ON","YES","TRUE","DEF","DEFAULT"]:
+        value=100.0
+    if value in ["OFF","NO","FALSE"]:
+        value=0.0
+    return float(value)
+
 class Instrument(object):
 
     """Base class to define the machinery for the REPL and commnd dispatch.
@@ -30,12 +38,11 @@ class Instrument(object):
         """Async read input from STDIN for reading commands."""
         cmd=""
         while True:
-            letter = await self.reader.read(1)
-            cmd+=letter
-            if cmd.endswith("\n"):
-                if cmd.strip()!="":
-                    break
-        return cmd.strip()
+            cmd = await self.reader.readline()
+            cmd=cmd.decode().strip()
+            if cmd!="":
+                break
+        return cmd
 
     def parse_cmd(self,command):
         """Find the command in the command table and get the correspoindig method name and parameter list."""
@@ -245,7 +252,7 @@ class SCPI(Instrument):
         """This needs to be overriden to actually do the reset."""
         for task in self.tsks:
             task.cancel()
-        self.cls()
+        self.cls(self)
 
     @Command(command="*SRE",parameters=(int,))
     def sre(self,mask):
@@ -293,7 +300,7 @@ class SCPI(Instrument):
         print(f"{err.code},{err.message}")
 
     @Command(command="SYSTem:VERSion?")
-    def version(self):
+    def read_version(self):
         print("1999.1")
 
     @Command(command="STATus:OPERation[:EVENt]?")
