@@ -11,6 +11,9 @@ on the USB COM port and respond when it sees a \n.
 It is possible to implement the class methods as co-routines that can be executed as seperate tasks, allowing your
 microcontroller to respond to other commands (e.g. status requests) in the meantime.
 
+This code was written by Gavin Burnell <G.Burnell@leeds.ac.uk> and is (C) University of Leeds 2023. It is licensed for use under the MIT license - see LICENSE
+for more details.
+
 # Example
 
 A simple example:
