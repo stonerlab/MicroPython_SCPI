@@ -27,9 +27,23 @@ def prep_plist(cmd):
         cmd=cmd.upper().strip()
     return cmd,plist
 
+def expand_optional(command):
+    """Where there is a [] in the command, create an entry with and without it recursively."""
+    commands=[command]
+    ix=0
+    while ix<len(commands):
+        command=commands[ix]
+        if "[" in command:
+            commands[ix]=re.sub(r'\[[^\[\]]*\]','',command, 1)
+            commands.append(re.sub(r'\[([^\[\]]*)\]',r'\1',command, 1))
+        else:
+            ix+=1
+    return commands
+
+
 def Command(command="",async_call=False, parameters=tuple()):
     """Mark the class method as implementing a SCPI Command.
-    
+
     Keyword Arguments:
         command (str):
             SCPI command to bind to the method. The command can be given in mixed case with optional sections - e.g.
@@ -45,7 +59,7 @@ def Command(command="",async_call=False, parameters=tuple()):
         parameters (tuple of callable):
             A set of callables that should be used to convert the string arguments to the correct python type
             for passing to the method.
-    
+
     Notes:
         This decorator replaces the method in the class with an instance of the Executable class that stores the metadata.
         This is because a generator object cannot have arbitary attributes added to it to store the extra metadata.
@@ -68,11 +82,11 @@ def BuildCommands(cls):
         define a set of SCPI commands that the class shopuld respond to. If the class doesn't have a command_map defined on the class
         but a parent class does, then the parent class command_map is deep copied and added to the current class - thus commands can
         be inherited from parent classes, but the command_maps are not shared.
-        
+
         The downside of this is that monkeypatching of additional commands in a parent class is not reflected in already defined child
         classes. It is, however, possible to override parent implementation of commands in a child class, or to monkeypatch the parent class
         implementations of existing commands.
-        
+
         It is also possible to simply have Executable instance class attributes that wrap arbitary functions so long as they expect an
         Instrument class argument as their first parameter.
     """
@@ -82,12 +96,9 @@ def BuildCommands(cls):
         else:
             setattr(cls,"command_map",deepcopy(cls.command_map))
     for name,method in [(x, getattr(cls,x)) for x in dir(cls) if isinstance(getattr(cls,x),Executable)]:
-            setattr(cls,name,method)
-            if "[" in method.command:
-                commands=[re.sub(r'\[[^\]]*\]','',method.command)]
-                commands.append(re.sub(r'\[([^\]]*)\]',r'\1',method.command))
-            else:
-                commands=[method.command]
+            setattr(cls,name,method.fnc) # restore the original method
+            setattr(cls,f"_scpi_{name}",method) # The shadow SCPI method
+            commands=expand_optional(method.command)
             for command in commands:
                 add_to=cls.command_map
                 while ":" in command:
@@ -95,13 +106,13 @@ def BuildCommands(cls):
                     if isinstance(add_to.get(stem,None),str):
                         add_to[stem]={"_":add_to[stem]}
                     if isinstance(add_to.get(sstem,None),str):
-                        add_to[sstem]=add_to[stem]                        
+                        add_to[sstem]=add_to[stem]
                     add_to.setdefault(stem,{"_":""})
                     add_to.setdefault(sstem,add_to[stem])
                     add_to=add_to[stem]
                 command,long_command,_=prep_part(command)
                 command,_=prep_plist(command)
-                long_command,_=prep_plist(long_command)                
+                long_command,_=prep_plist(long_command)
                 if command in add_to and isinstance(add_to[command],dict):
                     add_to[command]["_"]=name
                 else:
@@ -109,7 +120,7 @@ def BuildCommands(cls):
                 if long_command in add_to and isinstance(add_to[long_command],dict):
                     add_to[long_command]["_"]=name
                 else:
-                    add_to[long_command]=name
+                    add_to[long_command]=f"_scpi_{name}"
     return cls
 
 class Executable(object):

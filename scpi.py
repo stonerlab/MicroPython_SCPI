@@ -1,4 +1,7 @@
-import uasyncio as asyncio
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 import sys
 from decorators import BuildCommands, Command, prep_plist
 from exceptions import SCPIError, CommandError
@@ -85,12 +88,13 @@ class Instrument(object):
                         raise CommandError
                     cmd_runner=getattr(self,cmd_runner)
                     plist=cmd_runner.prep_parameters(plist)
+                    real_command=getattr(self,cmd_runner.name,cmd_runner)
                     if cmd_runner.async_call==1: # Run as async task, continue to process requests
-                        self.tasks.append((cmd_runner.name,asyncio.create_task(cmd_runner(self,*plist))))
+                        self.tasks.append((cmd_runner.name,asyncio.create_task(real_command(*plist))))
                     elif cmd_runner.async_call==2: # async task, but block executing more tasks for now
-                        await cmd_runner(self,*plist)
+                        await real_command(*plist)
                     else: # Non async task
-                        cmd_runner(self,*plist)
+                        real_command(*plist)
                     done=list(reversed([ix for ix,task in enumerate(self.tasks) if task[1].done()]))
                     for ix in done: # Dead task collection
                         del self.tasks[ix]
@@ -250,9 +254,9 @@ class SCPI(Instrument):
     @Command(command="*RST")
     def reset(self):
         """This needs to be overriden to actually do the reset."""
-        for task in self.tsks:
+        for task in self.tasks:
             task.cancel()
-        self.cls(self)
+        self.cls()
 
     @Command(command="*SRE",parameters=(int,))
     def sre(self,mask):
