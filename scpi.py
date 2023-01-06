@@ -3,7 +3,8 @@ try:
 except ImportError:
     import asyncio
 import sys
-from decorators import BuildCommands, Command, prep_plist
+
+from decorators import BuildCommands, Command, prep_plist, tokenize
 from exceptions import SCPIError, CommandError
 
 def OnOffFloat(value):
@@ -79,28 +80,29 @@ class Instrument(object):
         """Main dispatcher of commands."""
         try: # Catch KeyBoard Interrupt
             while True: # Main loop
-                cmd = await self.ainput()
-                try:
-                    cmd_runner,plist=self.parse_cmd(cmd)
-                    if isinstance(cmd_runner,dict):
-                        cmd_runner=cmd_runner.get("_",None)
-                    if cmd_runner is None:
-                        raise CommandError
-                    cmd_runner=getattr(self,cmd_runner)
-                    plist=cmd_runner.prep_parameters(plist)
-                    real_command=getattr(self,cmd_runner.name,cmd_runner)
-                    if cmd_runner.async_call==1: # Run as async task, continue to process requests
-                        self.tasks.append((cmd_runner.name,asyncio.create_task(real_command(*plist))))
-                    elif cmd_runner.async_call==2: # async task, but block executing more tasks for now
-                        await real_command(*plist)
-                    else: # Non async task
-                        real_command(*plist)
-                    done=list(reversed([ix for ix,task in enumerate(self.tasks) if task[1].done()]))
-                    for ix in done: # Dead task collection
-                        del self.tasks[ix]
-                except SCPIError as e: #Catch Instrument errors and append to the error queue
-                    self.error_q.append(e)
-                    continue
+                cmd_String = await self.ainput()
+                for cmd in tokenize(cmd_String, ";"): # Deal with multiple commands
+                    try:
+                        cmd_runner,plist=self.parse_cmd(cmd)
+                        if isinstance(cmd_runner,dict):
+                            cmd_runner=cmd_runner.get("_",None)
+                        if cmd_runner is None:
+                            raise CommandError
+                        cmd_runner=getattr(self,cmd_runner)
+                        plist=cmd_runner.prep_parameters(plist)
+                        real_command=getattr(self,cmd_runner.name,cmd_runner)
+                        if cmd_runner.async_call==1: # Run as async task, continue to process requests
+                            self.tasks.append((cmd_runner.name,asyncio.create_task(real_command(*plist))))
+                        elif cmd_runner.async_call==2: # async task, but block executing more tasks for now
+                            await real_command(*plist)
+                        else: # Non async task
+                            real_command(*plist)
+                        done=list(reversed([ix for ix,task in enumerate(self.tasks) if task[1].done()]))
+                        for ix in done: # Dead task collection
+                            del self.tasks[ix]
+                    except SCPIError as e: #Catch Instrument errors and append to the error queue
+                        self.error_q.append(e)
+                        continue
         except KeyboardInterrupt:
             return True
 

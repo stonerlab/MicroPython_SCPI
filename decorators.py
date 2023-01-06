@@ -3,7 +3,26 @@ __all__=["BuildCommands","Command","prep_plist"]
 from copy import deepcopy
 import re
 
-from exceptions import TooFewParameters, TooManyParameters, DataTypeError
+from exceptions import TooFewParameters, TooManyParameters, DataTypeError, CommandSyntaxError
+
+def tokenize(string,splitter):
+    """Take string, look for quoted parts and replace with a token and then split on splitter."""
+    tokens=[]
+    quote_search=re.compile(r'(\"[^\"]*\")')
+    while '"' in string:
+        match=quote_search.search(string)
+        if not match:
+            raise CommandSyntaxError
+        ix=len(tokens)
+        tokens.append(match.groups(0)[0])
+        string=string[:match.start()]+f"<<{ix}>>"+string[match.end():]
+    words=string.split(splitter)
+    for ix,word in enumerate(words):
+        for iy in range(len(tokens)):
+            if f"<<{iy}>>" in word:
+                word=word.replace(f"<<{iy}>>",tokens[iy])
+        words[ix]=word
+    return words
 
 def prep_part(cmd):
     """Split a command pattern on :, find stem long and short forms and remainder."""
@@ -19,9 +38,7 @@ def prep_plist(cmd):
     if " " in cmd: # We have some parameters
         plist=cmd[cmd.index(" "):].strip()
         cmd=cmd[:cmd.index(" ")].upper().strip()
-        plist=re.sub(r'\"([^\"]*)\,([^\"]*)\"',r'\1|\2',plist)
-        plist=re.sub(r'\"([^\"]*)\"',r'\1',plist)
-        plist=[x.replace("|",",") for x in plist.split(",")]
+        plist=tokenize(plist,",")
     else:
         plist=[]
         cmd=cmd.upper().strip()
