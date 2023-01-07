@@ -1,7 +1,8 @@
 from led import LED
 while True:
     try:
-        LED().run()
+        runner=LED()
+        runner.run()
     except KeyboardInterrupt:
         break
     except Exception as e:

@@ -4,8 +4,14 @@ except ImportError:
     import asyncio
 import sys
 
-from decorators import BuildCommands, Command, prep_plist, tokenize
-from exceptions import SCPIError, CommandError
+from decorators import BuildCommands, Command, prep_plist, tokenize, prep_part
+from exceptions import SCPIError, CommandError, DataTypeError, ParameterDataOutOfRange
+
+inf=float('inf')
+nan=float('nan')
+
+def isnan(value):
+    return str(value)=='nan'
 
 def OnOffFloat(value):
     value=value.upper()
@@ -13,7 +19,100 @@ def OnOffFloat(value):
         value=100.0
     if value in ["OFF","NO","FALSE"]:
         value=0.0
-    return float(value)
+    try:
+        return float(value)
+    except (TypeError,ValueError):
+        raise DataTypeError
+
+def Boolean(value):
+    if value.strip().upper() in ["1","ON"]:
+        return True
+    if value.strip().upper() in ["0","OFF"]:
+        return False
+    raise DataTypeError
+
+class Float(object):
+
+    """Class that creates a callable instance to convert string
+    representation of a float to a float, but with optional Min
+    and Max settings."""
+
+    def __init__(self,min=None,max=None,nan=None,default=None):
+        """Set values to be used for MIN MAX NAN and DEF."""
+        self.min=min
+        self.max=max
+        self.nan=nan
+        self.default=default
+
+    def __call__(self,value):
+        for attr,search in zip(["min","max","nan","default"],["MIN","MAX","NAN","DEF"]):
+            attr=getattr(self,attr)
+            if attr is not None and value.strip().upper()==search:
+                return attr
+        try:
+            ret=float(value)
+            if isinstance(self.min,float) and ret<self.min:
+                raise ParameterDataOutOfRange
+            if isinstance(self.max,float) and ret>self.max:
+                raise ParameterDataOutOfRange
+            return ret
+        except (TypeError,ValueError):
+            raise DataTypeError
+
+class Int(object):
+
+    """Class that creates a callable instance to convert string
+    representation of a float to a float, but with optional Min
+    and Max settings."""
+
+    def __init__(self,min=None,max=None,default=None):
+        """Set values to be used for MIN MAX NAN and DEF."""
+        self.min=min
+        self.max=max
+        self.default=default
+
+    def __call__(self,value):
+        for attr,search in zip(["min","max","default"],["MIN","MAX","DEF"]):
+            attr=getattr(self,attr)
+            if attr is not None and value.strip().upper()==search:
+                return attr
+        try:
+            ret=int(value)
+            if isinstance(self.min,int) and ret<self.min:
+                raise ParameterDataOutOfRange
+            if isinstance(self.max,int) and ret>self.max:
+                raise ParameterDataOutOfRange
+            return ret
+        except (TypeError,ValueError):
+            raise DataTypeError
+
+class Enum(object):
+
+    """Map a set of SCPI strings to values."""
+
+    def __init__(self,*args,**kargs):
+        """Create an obkect with a mapping between string labels and values.
+
+        Either pass keyword arguments mapping labels to values or positional
+        arguments get mapped to 0,1,2...
+        """
+        for ix,arg in enumerate(args):
+            kargs[arg]=ix
+        self.mapping={}
+        for label,value in kargs.items():
+            short,long,_=prep_part(label)
+            self.mapping[short]=value
+            self.mapping[long]=value
+
+    def __vall__(self,value):
+        value=value.upper*()
+        if value in self.mappoing:
+            return self.napping[value]
+        raise DataTypeError
+
+
+
+
 
 class Instrument(object):
 

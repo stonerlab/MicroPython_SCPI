@@ -1,8 +1,8 @@
 # MicroPython SCPI
 
-This is an implementation of a SCPI-1999 command parser for a MicroPython based microcontroller - specifically it is
-being written for a Raspberry Pi Pico board. In other words, it lets you interact with a Pico as if it were a SCPI
-instrument.
+This is a simplified partial implementation of a SCPI-1999 command parser for a MicroPython based microcontroller -
+specifically it is being written for a Raspberry Pi Pico board. In other words, it lets you interact with a Pico as if
+ it were a SCPI instrument.
 
 To use it, you write a subclass of the scpi.SCPI class and implement methods that are mapped to SCPI commands. To run
 the instrumnet, you instantiate your class and execute the .run() method. After that the Pico will wait for input
@@ -39,6 +39,28 @@ that will sleep for 10 seconds and then simple echo its parameter back to the us
 # Warning !
 
 This code is really very experimental! It's not extensively tested and is probably rather fragile so please don't try to use it in a situation where expensive damage or harm to people might result from failure without doing a full check and test yourself!
+
+# Disclaimer
+
+The full SCPI specification is fairly detailed and has a number of features that are not widely used in real world instruments.
+This code implements most of the common requirements however.
+
+Specifically, it supports the common '\*' required IEEE488.2 commands. It supports long and short forms of device dependent
+commands and optional nodes and optical numeric suffixes. Commands can be concatendated with semi-colons and device
+dependent commands can be absolute from the root node of the command tree (with the initial colon being optional) or
+relative to the parent of the last executed command node.
+
+What is not supported ;out of the box' is units on parameters and expressions. In principle both could be implemented
+by providing parameter conversion functions that were aware of either. The provided parameter conversion functions are:
+- scpi.Float(min=\<val\>,max=\<val\>,nan=\<val\>,default=\<val\>) supports conversions with optinal MIN, MAX, NAN and DEF
+  values. If the min or max values are floats, then the input value is also range checked against the corresponding limit
+  and a ParameterDataOutOfRange error is raised.
+- scpi.Int(max=\<val\>,max=\<val\>, default=\<val\>) similarly to scpi.Float converts values to integers with limits and default
+  value.
+- scpi.Bool() converts "1" or "ON" to a True and "0" and "OFF" to a False
+- scpi.Enum(LABel1=\<val\>,LABel2=\<val\>...) builds a mappin between labels with long and shrt forms and a value. Input
+  values are converted to UPPERCASE beore being compared against the possible mapping values. Unmatched labels get a
+  DataTypeError.
 
 # Details
 
