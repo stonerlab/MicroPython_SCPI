@@ -131,11 +131,11 @@ def BuildCommands(cls):
                 command,_=prep_plist(command)
                 long_command,_=prep_plist(long_command)
                 if command in add_to and isinstance(add_to[command],dict):
-                    add_to[command]["_"]=name
+                    add_to[command]["_"]=f"_scpi_{name}"
                 else:
-                    add_to[command]=name
+                    add_to[command]=f"_scpi_{name}"
                 if long_command in add_to and isinstance(add_to[long_command],dict):
-                    add_to[long_command]["_"]=name
+                    add_to[long_command]["_"]=f"_scpi_{name}"
                 else:
                     add_to[long_command]=f"_scpi_{name}"
     return cls
