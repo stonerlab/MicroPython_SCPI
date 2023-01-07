@@ -46,19 +46,19 @@ The full SCPI specification is fairly detailed and has a number of features that
 This code implements most of the common requirements however.
 
 Specifically, it supports the common '\*' required IEEE488.2 commands. It supports long and short forms of device dependent
-commands and optional nodes and optical numeric suffixes. Commands can be concatendated with semi-colons and device
+commands and optional nodes and optional numeric suffixes. Commands can be concatendated with semi-colons and device
 dependent commands can be absolute from the root node of the command tree (with the initial colon being optional) or
 relative to the parent of the last executed command node.
 
 What is not supported ;out of the box' is units on parameters and expressions. In principle both could be implemented
 by providing parameter conversion functions that were aware of either. The provided parameter conversion functions are:
-- scpi.Float(min=\<val\>,max=\<val\>,nan=\<val\>,default=\<val\>) supports conversions with optinal MIN, MAX, NAN and DEF
+- **scpi.Float**(min=\<val\>,max=\<val\>,nan=\<val\>,default=\<val\>) supports conversions with optinal MIN, MAX, NAN and DEF
   values. If the min or max values are floats, then the input value is also range checked against the corresponding limit
   and a ParameterDataOutOfRange error is raised.
-- scpi.Int(max=\<val\>,max=\<val\>, default=\<val\>) similarly to scpi.Float converts values to integers with limits and default
+- **scpi.Int**(max=\<val\>,max=\<val\>, default=\<val\>) similarly to scpi.Float converts values to integers with limits and default
   value.
-- scpi.Bool() converts "1" or "ON" to a True and "0" and "OFF" to a False
-- scpi.Enum(LABel1=\<val\>,LABel2=\<val\>...) builds a mappin between labels with long and shrt forms and a value. Input
+- **scpi.Bool**() converts "1" or "ON" to a True and "0" and "OFF" to a False
+- **scpi.Enum**(LABel1=\<val\>,LABel2=\<val\>...) builds a mappin between labels with long and shrt forms and a value. Input
   values are converted to UPPERCASE beore being compared against the possible mapping values. Unmatched labels get a
   DataTypeError.
 
@@ -91,7 +91,7 @@ tasks have completed. Finally *RST will cancel all running tasks before clearing
 
 Synopsis:
 
-    @Command(command=\<SCPI command string\>, async_call=bool|int, parameters=tuple)
+    @Command(command=<SCPI command string>, async_call=bool|int, parameters=tuple)
 
 The \<SCPI Command string\> tries to be similar to how SCPI commands are documented in manuals - a mixture of short
 UPPer case letters defining a command abreviation and a verbose command defines in mixed case. As with all SCPI
