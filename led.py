@@ -1,4 +1,4 @@
-from scpi import TestInstrument, OnOffFloat
+from scpi import TestInstrument, OnOffFloat, Int
 from decorators import Command, BuildCommands
 
 try:
@@ -37,12 +37,12 @@ class LED(TestInstrument):
     @Command(command="OUTput[0][:LEVeL]", parameters=(OnOffFloat,))
     def set_level(self,level):
         self._set_level(0,level)
-        
+
     @Command(command="OUTput[0][:LEVeL]?")
     def read_level(self):
         print(f"{self.level[0]:.1f}%")
 
-    @Command(command="OUTput[0]:FREQuerncy", parameters=(int,))
+    @Command(command="OUTput[0]:FREQuerncy", parameters=(Int(min=5,max=1_000_000,default=10_000),))
     def set_freq(self,freq):
         self._set_freq(0,freq)
 
@@ -58,7 +58,7 @@ class LED(TestInstrument):
     def read_level1(self):
         print(f"{self.level[1]:.1f}%")
 
-    @Command(command="OUTput1:FREQuerncy", parameters=(int,))
+    @Command(command="OUTput1:FREQuerncy", parameters=(Int(min=5,max=1_000_000,default=10_000),))
     def set_freq1(self,freq):
         self._set_freq(1,freq)
 
@@ -74,18 +74,13 @@ class LED(TestInstrument):
     def read_level2(self):
         print(f"{self.level[2]:.1f}%")
 
-    @Command(command="OUTput2:FREQuerncy", parameters=(int,))
+    @Command(command="OUTput2:FREQuerncy", parameters=(Int(min=5,max=1_000_000,default=10_000),))
     def set_freq2(self,freq):
         self._set_freq(2,freq)
 
     @Command(command="OUTput2:FREQuency?")
     def read_freq2(self):
         print(self.pwm[2].freq())
-
-    @Command(command="OUTput:ALL[:LEVeL]", parameters=(OnOffFloat,))
-    def set_level2(self,level):
-        for ix in range(3):
-            self._set_level(ix,level)
 
 if __name__=="__main__":
     runner=LED()
