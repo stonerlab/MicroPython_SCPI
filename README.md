@@ -133,4 +133,6 @@ new attribute to the class _scpi_{name} that holds the Executable class instance
 command parameters - so it is this attribute name that is referred to in the command_map.
 
 Note that this scheme does have a limitation of only supporting single inheritence of classes that implment SCPI
-commands. This is another limitation to be addressed in a later version!
+commands. This is another limitation to be addressed in a later version! On the otherhand, MicroPython itself has some
+significant difference in how multiple inheritance is done from CPython and the offiical advice is to avoid complex
+class heirarchies - so perhas it's better to stick to single inheritance anyway!'
