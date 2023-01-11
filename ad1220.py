@@ -3,10 +3,10 @@
 AD1220 driver
 """
 import math
-from machine import SPI, Pin
+from machine import SPI, Pin, lightsleep
 
 from scpi import TestInstrument
-from decorator import BuildCommands, Command
+from decorators import BuildCommands, Command
 import uasyncio as asyncio
 
 RESET=0b0000_0110
@@ -22,10 +22,10 @@ class ADC1220(TestInstrument):
     """Implement a SCPI command interface to a TI ADC1220 confgiured for measuring a Hall sensor."""
 
     def __init__(self):
-        self.spi=SPI(baudrate=1_000_000,
+        self.spi=SPI(0,baudrate=50_000_000,
                      polarity=0,
                      phase=1,
-                     bits=1,
+                     bits=8,
                      firstbit=SPI.MSB,
                      sck=Pin(18),
                      mosi=Pin(19),
@@ -41,6 +41,7 @@ class ADC1220(TestInstrument):
         self._idac_mux=[0,0]
         self._filter=0
         self._vref=0
+        self._pswitch=0
         self.setup()
         super().__init__()
 
@@ -153,6 +154,10 @@ class ADC1220(TestInstrument):
             raise ValueError(f"Illeagal IDAC2 mux {value} request.")
         self._idac_mux[1]=value
         self.wreg23()
+        
+    @property
+    def ready(self):
+        return self.drdy.value()==0
 
     def wreg0(self):
         gain=[1,2,4,8,16,32,64,128].index(self._gain)
@@ -179,16 +184,18 @@ class ADC1220(TestInstrument):
             (bytes):
                 1-3 bytes of data
         """
-        if not 0<nbytes<4:
-            raise ValueError(f"Incorrect number of bytes {nbytes} requested")
-        if not 0<register<4:
-            raise ValueError(f"Incorrect register {register} requested")
+        if not 0<nbytes<=4:
+            raise ValueError(f"Illegal number of bytes {nbytes} requested")
+        if not 0<=register<4:
+            raise ValueError(f"Illegal register {register} requested")
 
-        data=RREG|register*4|bytes
+        data=RREG|register*4|(nbytes-1)
+        print(f"{data:08b}")
         self.cs.value(0)
-        await asyncio.sleep_ms(1)
-        self.spi.write(bytes[data])
-        ret=int.from_butes(self.spi.read(nbytes),"big")
+        lightsleep(10)
+        self.spi.write(bytes([data]))
+        ret=int.from_bytes(self.spi.read(nbytes),"big")
+        self.cs.value(1)
         return ret
 
     def write_reg(self,register,data):
@@ -203,26 +210,58 @@ class ADC1220(TestInstrument):
         Returns:
             None
             """
-        if not 0<register<4:
-            raise ValueError(f"Incorrect register {register} requested")
-
-        data1=bytes([RREG|register*4|len(data)])
+        if not 0<=register<4:
+            raise ValueError(f"Illegal register {register} requested")
         for datalen in range(10):
             if data<2**(datalen*8):
                 break
+        print(register,data)
+        data1=bytes([WREG|register*4|(datalen-1)])
+
         data2=data.to_bytes(datalen,"big")
+        
+        rep=f"{{:0{8*datalen+8}b}}"
+        print(rep)
+        print(rep.format(int.from_bytes(data1+data2,"big")))
 
         self.cs.value(0)
-        await asyncio.sleep_ms(1)
+        lightsleep(10)
         self.spi.write(data1+data2)
+        self.cs.value(1)
 
     def setup(self):
         """Set defaults for Hall measurements."""
+        self.send(RESET)
+        lightsleep(10)
         self.mux=3
-        self.pga=1
-        self.gain=16
+        self.pga=0
+        self.gain=1
         self.rate=20
         self.filter=2
         self.idac1_mux=1
         self.idac2_mux=0
         self.idac_level=1E-3
+        
+    def send(self,command,readbytes=0):
+        self.cs.value(0)
+        lightsleep(10)
+        self.spi.write(bytes([command]))
+        lightsleep(10)
+        if readbytes>0:
+            ret=self.spi.read(readbytes)
+            ret=int.from_bytes(ret,"big")
+            lightsleep(10)
+        else:
+            ret=None
+        self.cs.value(1)
+        return ret
+    
+    def read(self):
+        if not self.ready:
+            self.send(START)
+            while not self.ready:
+                lightsleep(10)
+        ret=self.send(READ,3)
+        return ret
+            
+        
