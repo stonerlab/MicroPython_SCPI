@@ -3,9 +3,10 @@
 AD1220 driver
 """
 import math
+import os
 from machine import SPI, Pin, lightsleep
 
-from scpi import TestInstrument
+from scpi import TestInstrument, Float, inf
 from decorators import BuildCommands, Command
 import uasyncio as asyncio
 
@@ -20,9 +21,11 @@ WREG=0b0100_0000
 class ADC1220(TestInstrument):
 
     """Implement a SCPI command interface to a TI ADC1220 confgiured for measuring a Hall sensor."""
+    
+    version=20230113
 
     def __init__(self):
-        self.spi=SPI(0,baudrate=50_000_000,
+        self.spi=SPI(0,baudrate=10_000_000,
                      polarity=0,
                      phase=1,
                      bits=8,
@@ -42,6 +45,11 @@ class ADC1220(TestInstrument):
         self._filter=0
         self._vref=0
         self._pswitch=0
+        if "calibration.txt" not in os.listdir():
+            with open("calibration.txt","w") as calib:
+                calib.write("1.000000\n")
+        with open("calibration.txt","r") as calib:
+            self._calib=float(calib.readline())
         self.setup()
         super().__init__()
 
@@ -190,11 +198,11 @@ class ADC1220(TestInstrument):
             raise ValueError(f"Illegal register {register} requested")
 
         data=RREG|register*4|(nbytes-1)
-        print(f"{data:08b}")
         self.cs.value(0)
         lightsleep(10)
         self.spi.write(bytes([data]))
-        ret=int.from_bytes(self.spi.read(nbytes),"big")
+        ret=self.spi.read(nbytes)
+        ret=int.from_bytes(ret,"little",False)
         self.cs.value(1)
         return ret
 
@@ -215,14 +223,11 @@ class ADC1220(TestInstrument):
         for datalen in range(10):
             if data<2**(datalen*8):
                 break
-        print(register,data)
         data1=bytes([WREG|register*4|(datalen-1)])
 
-        data2=data.to_bytes(datalen,"big")
+        data2=data.to_bytes(datalen,"little")
         
         rep=f"{{:0{8*datalen+8}b}}"
-        print(rep)
-        print(rep.format(int.from_bytes(data1+data2,"big")))
 
         self.cs.value(0)
         lightsleep(10)
@@ -234,7 +239,7 @@ class ADC1220(TestInstrument):
         self.send(RESET)
         lightsleep(10)
         self.mux=3
-        self.pga=0
+        self.pga=1
         self.gain=1
         self.rate=20
         self.filter=2
@@ -250,6 +255,8 @@ class ADC1220(TestInstrument):
         if readbytes>0:
             ret=self.spi.read(readbytes)
             ret=int.from_bytes(ret,"big")
+            if ret>2**23:
+                ret-=2**24
             lightsleep(10)
         else:
             ret=None
@@ -263,5 +270,50 @@ class ADC1220(TestInstrument):
                 lightsleep(10)
         ret=self.send(READ,3)
         return ret
+    
+    @Command(command="MEASure:RAW?")
+    def read_raw(self):
+        print(self.read())
+        
+    @Command(command="MEASure:VOLTage?")
+    def read_volt(self):
+        code=self.read()
+        volt=(code/2**23)*(2.048/self._gain)
+        print(volt)
+        
+    @Command(command="MEASure[:FieLD]?")
+    def read_field(self):
+        code=self.read()
+        volt=(code/2**23)*(2.048/self._gain)
+        field=volt/self._calib
+        print(field)
+        
+    @Command(command="MEASure[:FieLD]:CALibration?")
+    def read_calibration(self):
+        print(self._calib)
+
+    @Command(command="MEASure[:FieLD]:CALibration",parameters=(float,))
+    def set_calibration(self,value):
+        rng=2.048/(self.gain*self._calib)
+        self._calib=value
+        print(rng,value)
+        with open("calibration.txt","w") as calib:
+            print("Open File")
+            calib.write(f"{value}\n")
+            print("Written value")
+        self.set_range(rng)
+            
+    @Command(command="MEASure[:FieLD]:RANGe?")
+    def read_range(self):
+        max_f=2.048/(self.gain*self._calib)
+        print(max_f)
+        
+    @Command(command="MEASure[:FieLD]:RANGe",parameters=(Float(min=0,max=inf),))
+    def set_range(self, value):
+        value=abs(value)*self._calib
+        value=max(2.048/128,min(2.048,value))
+        self.gain=2**math.ceil(math.log2(2.048/value))
+        
+        
             
         

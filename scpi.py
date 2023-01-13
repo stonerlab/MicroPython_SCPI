@@ -37,23 +37,19 @@ class Float(object):
     representation of a float to a float, but with optional Min
     and Max settings."""
 
-    def __init__(self,min=None,max=None,nan=None,default=None):
+    def __init__(self,min=None,max=None,nan=None,default=None,**kargs):
         """Set values to be used for MIN MAX NAN and DEF."""
-        self.min=min
-        self.max=max
-        self.nan=nan
-        self.default=default
+        self._mapping={"MIN":min,"MAX":max,"DEF":default,"NAN":nan}
+        self._mapping.update(kargs)
 
     def __call__(self,value):
-        for attr,search in zip(["min","max","nan","default"],["MIN","MAX","NAN","DEF"]):
-            attr=getattr(self,attr)
-            if attr is not None and value.strip().upper()==search:
-                return attr
+        if isinstance(value,str) and self._mapping.get(value.strip().upper(),None) is not None:
+            return self._mappiong[value.strip().upper()]
         try:
             ret=float(value)
-            if isinstance(self.min,float) and ret<self.min:
+            if isinstance(self._mapping["MIN"],float) and ret<self._mapping["MIN"]:
                 raise ParameterDataOutOfRange
-            if isinstance(self.max,float) and ret>self.max:
+            if isinstance(self._mapping["MAX"],float) and ret>self._mapping["MAX"]:
                 raise ParameterDataOutOfRange
             return ret
         except (TypeError,ValueError):
