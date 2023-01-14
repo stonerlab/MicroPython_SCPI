@@ -32,15 +32,19 @@ class ADC1220(TestInstrument):
     - MEASure[:FieLD]:CAK <float> - set the calibration constance in Volts/magnetic field unit. This constant is
       written to a file on the Pico so will persist until it is overwritten.
     - MEASure:VOLTage? - Read the hall sensor's voltage directly.
+    - MEASure:HallRESistance? - Read the hall sensor's voltage and divide by the current level to get Rxy.
     - MEASure:RAW? - Read the raw signed integer code from the AD convertor.
-
-    To be implemented
-    ~~~~~~~~~~~~~~~~~
-
+    - MEASure:TEMPerature? - Access the ADC1220's temperature sensor
     - SOURce:LEVeL <float> - set the current source that excites the hall sensor. Can be int he range 10uA to 1.5mA
       but with fixed values.
     - SOURce:LEVel? - Read the current source level
-    - MEASure:TEMPerature? - Access the ADC1220's temperature sensor
+
+    To be implemented
+    ~~~~~~~~~~~~~~~~~
+    - MEASure[:FieLD]:RATE? - report the ADC rate
+    - MEASure[:FieLD]:RATE <int> - set the sample rate in S/s
+    - *RST - override to re run self.setup()
+    - *STB - override the status byte property to use self.ready for MAV bit.
     """
 
     version=20230113
@@ -66,6 +70,7 @@ class ADC1220(TestInstrument):
         self._filter=0
         self._vref=0
         self._pswitch=0
+        self._temp=0
         if "calibration.txt" not in os.listdir():
             with open("calibration.txt","w") as calib:
                 calib.write("1.000000\n")
@@ -114,10 +119,17 @@ class ADC1220(TestInstrument):
     def rate(self,value):
         if int(value) not in [20,45,90,175,330,600,1000]:
             raise ValueError(f"Illeagal rate value {value} selected.")
-        rate=[20,45,90,175,330,600,1000].index(int(value))
-        data=rate*32+4
-        self.write_reg(1, data)
         self._rate=value
+        self.wreg1()
+        
+    @property
+    def temperature(self):
+        return bool(self._temp)
+    
+    @temperature.setter
+    def temperature(self,value):
+        self._temp=int(bool(value))
+        self.wreg1()
 
     @property
     def idac_level(self):
@@ -192,6 +204,11 @@ class ADC1220(TestInstrument):
         gain=[1,2,4,8,16,32,64,128].index(self._gain)
         data=self._pga|gain*2|self._mux*16
         self.write_reg(0, data)
+        
+    def wreg1(self):
+        rate=[20,45,90,175,330,600,1000].index(int(self.rate))
+        data=rate*32+4+2*self._temp
+        self.write_reg(1, data)
 
     def wreg23(self):
         idac_level=[0,1E-5,5E-5,1E-4,2.5E-4,5E-4,1E-3,1.5E-3].index(self._idac_level)
@@ -263,6 +280,7 @@ class ADC1220(TestInstrument):
         self.pga=1
         self.gain=1
         self.rate=20
+        self.temperature=False
         self.filter=2
         self.idac1_mux=1
         self.idac2_mux=0
@@ -302,13 +320,31 @@ class ADC1220(TestInstrument):
         volt=(code/2**23)*(2.048/self._gain)
         print(volt)
 
+    @Command(command="MEASure:HallRESistance?")
+    def read_resistance(self):
+        code=self.read()
+        volt=(code/2**23)*(2.048/self._gain)
+        print(volt/self.idac_level)
+
     @Command(command="MEASure[:FieLD]?")
     def read_field(self):
         code=self.read()
         volt=(code/2**23)*(2.048/self._gain)
         field=volt/self._calib
         print(field)
-
+        
+    @Command(command="MEASure:TEMPerature?")
+    def read_temperature(self):
+        self.temperature=True
+        lightsleep(20)
+        code=self.read()
+        code=code>>10
+        if code>2**13:
+            code-=2**14
+        self.temperature=False
+        lightsleep(20)
+        print(0.03125*code)
+        
     @Command(command="MEASure[:FieLD]:CALibration?")
     def read_calibration(self):
         print(self._calib)
@@ -330,4 +366,19 @@ class ADC1220(TestInstrument):
     def set_range(self, value):
         value=abs(value)*self._calib
         value=max(2.048/128,min(2.048,value))
-        self.gain=2**math.ceil(math.log2(2.048/value))
+        for gain in [128,64,32,16,8,4,2,1]:
+            if value<=2.048/gain:
+                break
+        self.gain=gain
+
+    @Command(command="SOURce[:LEVeL]?")
+    def read_source_level(self):
+        print(self.idac_level)
+        
+    @Command(command="SOURce[:LEVeL]", parameters=(Float(default=1E-3,min=1E-5,max=1.5E-3,OFF=0),))
+    def set_source_level(self,level):
+        for l in [0,1E-5,5E-5,1E-4,2.5E-4,5E-4,1E-3,1.5E-3]:
+            if l>=level:
+                break
+        self.idac_level=l
+    

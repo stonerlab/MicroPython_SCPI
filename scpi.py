@@ -39,12 +39,21 @@ class Float(object):
 
     def __init__(self,min=None,max=None,nan=None,default=None,**kargs):
         """Set values to be used for MIN MAX NAN and DEF."""
-        self._mapping={"MIN":min,"MAX":max,"DEF":default,"NAN":nan}
-        self._mapping.update(kargs)
+        self._mapping={"MIN":min,
+                       "MINIMUM":min,
+                       "MAX":max,
+                       "MAXIMUM":max,
+                       "DEF":default,
+                       "DEFAULT":default,
+                       "NAN":nan}
+        for k,v in kargs.items():
+            short,long,_=prep_part(k)
+            self._mapping[short.upper()]=v
+            self._mapping[long.upper()]=v
 
     def __call__(self,value):
         if isinstance(value,str) and self._mapping.get(value.strip().upper(),None) is not None:
-            return self._mappiong[value.strip().upper()]
+            return self._mapping[value.strip().upper()]
         try:
             ret=float(value)
             if isinstance(self._mapping["MIN"],float) and ret<self._mapping["MIN"]:
