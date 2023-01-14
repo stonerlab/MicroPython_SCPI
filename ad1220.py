@@ -8,7 +8,6 @@ from machine import SPI, Pin, lightsleep
 
 from scpi import TestInstrument, Float, inf
 from decorators import BuildCommands, Command
-import uasyncio as asyncio
 
 RESET=0b0000_0110
 START=0b0000_1000
@@ -20,8 +19,30 @@ WREG=0b0100_0000
 @BuildCommands
 class ADC1220(TestInstrument):
 
-    """Implement a SCPI command interface to a TI ADC1220 confgiured for measuring a Hall sensor."""
-    
+    """Implement a SCPI command interface to a TI ADC1220 confgiured for measuring a Hall sensor.
+
+    This class implements the following device specific commands:
+
+    - MEASure[:FieLD]? - read the hall sensor and return the current magnetic field using the stored calibration.
+    - MEASure[:FieLD]:RANGe? - Read the current maximum field on the current range.
+    - MEASure[:FieLD]:RANGe <float> - Set the range to be able to read <float> magnetic field. The actual range
+      set will likely differ and there is an absolute limit due to the fixed gains on the ADC1220's PGA
+    - MEASure[:FieLD]:CALibration? - Read the calibration constant (in Volts/magnetic field unit. The instrument
+      does not care what units are used for magnetic field since it just reports a bare number.
+    - MEASure[:FieLD]:CAK <float> - set the calibration constance in Volts/magnetic field unit. This constant is
+      written to a file on the Pico so will persist until it is overwritten.
+    - MEASure:VOLTage? - Read the hall sensor's voltage directly.
+    - MEASure:RAW? - Read the raw signed integer code from the AD convertor.
+
+    To be implemented
+    ~~~~~~~~~~~~~~~~~
+
+    - SOURce:LEVeL <float> - set the current source that excites the hall sensor. Can be int he range 10uA to 1.5mA
+      but with fixed values.
+    - SOURce:LEVel? - Read the current source level
+    - MEASure:TEMPerature? - Access the ADC1220's temperature sensor
+    """
+
     version=20230113
 
     def __init__(self):
@@ -162,7 +183,7 @@ class ADC1220(TestInstrument):
             raise ValueError(f"Illeagal IDAC2 mux {value} request.")
         self._idac_mux[1]=value
         self.wreg23()
-        
+
     @property
     def ready(self):
         return self.drdy.value()==0
@@ -226,8 +247,8 @@ class ADC1220(TestInstrument):
         data1=bytes([WREG|register*4|(datalen-1)])
 
         data2=data.to_bytes(datalen,"little")
-        
-        rep=f"{{:0{8*datalen+8}b}}"
+
+        #rep=f"{{:0{8*datalen+8}b}}"
 
         self.cs.value(0)
         lightsleep(10)
@@ -246,7 +267,7 @@ class ADC1220(TestInstrument):
         self.idac1_mux=1
         self.idac2_mux=0
         self.idac_level=1E-3
-        
+
     def send(self,command,readbytes=0):
         self.cs.value(0)
         lightsleep(10)
@@ -262,7 +283,7 @@ class ADC1220(TestInstrument):
             ret=None
         self.cs.value(1)
         return ret
-    
+
     def read(self):
         if not self.ready:
             self.send(START)
@@ -270,24 +291,24 @@ class ADC1220(TestInstrument):
                 lightsleep(10)
         ret=self.send(READ,3)
         return ret
-    
+
     @Command(command="MEASure:RAW?")
     def read_raw(self):
         print(self.read())
-        
+
     @Command(command="MEASure:VOLTage?")
     def read_volt(self):
         code=self.read()
         volt=(code/2**23)*(2.048/self._gain)
         print(volt)
-        
+
     @Command(command="MEASure[:FieLD]?")
     def read_field(self):
         code=self.read()
         volt=(code/2**23)*(2.048/self._gain)
         field=volt/self._calib
         print(field)
-        
+
     @Command(command="MEASure[:FieLD]:CALibration?")
     def read_calibration(self):
         print(self._calib)
@@ -296,24 +317,17 @@ class ADC1220(TestInstrument):
     def set_calibration(self,value):
         rng=2.048/(self.gain*self._calib)
         self._calib=value
-        print(rng,value)
         with open("calibration.txt","w") as calib:
-            print("Open File")
             calib.write(f"{value}\n")
-            print("Written value")
         self.set_range(rng)
-            
+
     @Command(command="MEASure[:FieLD]:RANGe?")
     def read_range(self):
         max_f=2.048/(self.gain*self._calib)
         print(max_f)
-        
+
     @Command(command="MEASure[:FieLD]:RANGe",parameters=(Float(min=0,max=inf),))
     def set_range(self, value):
         value=abs(value)*self._calib
         value=max(2.048/128,min(2.048,value))
         self.gain=2**math.ceil(math.log2(2.048/value))
-        
-        
-            
-        
