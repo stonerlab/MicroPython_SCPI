@@ -5,9 +5,12 @@ AD1220 driver
 import math
 import os
 from machine import SPI, Pin, lightsleep
+import uasyncio as asyncio
 
-from scpi import TestInstrument, Float, inf
+from scpi import TestInstrument, Float, inf, Enum
 from decorators import BuildCommands, Command
+
+from RGB1602 import Display
 
 RESET=0b0000_0110
 START=0b0000_1000
@@ -38,6 +41,8 @@ class ADC1220(TestInstrument):
     - SOURce:LEVeL <float> - set the current source that excites the hall sensor. Can be int he range 10uA to 1.5mA
       but with fixed values.
     - SOURce:LEVel? - Read the current source level
+    - DISPlay:MODE FieLD|VOLTage|TEMPerature|HallRESistance|RA - what to show on the LCD display
+    - DISPLAY:MODE? return the display mode
 
     To be implemented
     ~~~~~~~~~~~~~~~~~
@@ -71,13 +76,21 @@ class ADC1220(TestInstrument):
         self._vref=0
         self._pswitch=0
         self._temp=0
+        self._display=Display()
+        self._display.open()
+        self._display_message="Ready"
+        self._mode="field"
+        
         if "calibration.txt" not in os.listdir():
             with open("calibration.txt","w") as calib:
-                calib.write("1.000000\n")
+                calib.write("1.000000,0.0000000\n")
         with open("calibration.txt","r") as calib:
-            self._calib=float(calib.readline())
+            self._calib=[float(x) for x in calib.readline().strip().split(",")]+[1.0,0.0]
+            self._calib=self._calib[:2]
         self.setup()
         super().__init__()
+        self.tasks.append(("_display", asyncio.create_task(self._display_measurement())))
+
 
     @property
     def mux(self):
@@ -285,6 +298,32 @@ class ADC1220(TestInstrument):
         self.idac1_mux=1
         self.idac2_mux=0
         self.idac_level=1E-3
+        
+    async def _display_measurement(self):
+        """Show the current measurement on the display."""
+        try: # Catch KeyBoard Interrupt
+            self._display.write("Ready")
+            while True:
+                await asyncio.sleep(0.5)
+                if self._mode=="field":
+                    self.read_field(output=None)
+                elif self._mode=="volt":
+                    self.read_volt(output=None)
+                elif self._mode=="temp":
+                    self.read_temperature(output=None)
+                elif self._mode=="hres":
+                    self.read_resistance(output=None)
+                elif self._mode=="message":
+                    self._display.clear()
+                    self._display.write(self._display_message)
+                else:
+                    self.read_raw(output=None)
+        except KeyboardInterrupt:
+            self.exit()
+            
+    def exit(self):
+        self._display.close()
+        super().exit()
 
     def send(self,command,readbytes=0):
         self.cs.value(0)
@@ -311,30 +350,46 @@ class ADC1220(TestInstrument):
         return ret
 
     @Command(command="MEASure:RAW?")
-    def read_raw(self):
-        print(self.read())
+    def read_raw(self, output=True):
+        code=self.read()
+        self._display.clear()
+        self._display.write(f"{code}")
+        if output:
+            print(code)
 
     @Command(command="MEASure:VOLTage?")
-    def read_volt(self):
+    def read_volt(self, output=True):
         code=self.read()
         volt=(code/2**23)*(2.048/self._gain)
-        print(volt)
+        self._display.clear()
+        val,lett=self.format(volt)
+        self._display.write(f"{val:.2f}{lett}V")
+        if output:
+            print(volt)
 
     @Command(command="MEASure:HallRESistance?")
-    def read_resistance(self):
+    def read_resistance(self, output=True):
         code=self.read()
         volt=(code/2**23)*(2.048/self._gain)
-        print(volt/self.idac_level)
+        self._display.clear()
+        val,lett=self.format(volt/self.idac_level)
+        self._display.write(f"{val:.2f}{lett}Ohm")
+        if output:
+            print(volt/self.idac_level)
 
     @Command(command="MEASure[:FieLD]?")
-    def read_field(self):
+    def read_field(self, output=True):
         code=self.read()
         volt=(code/2**23)*(2.048/self._gain)
-        field=volt/self._calib
-        print(field)
+        field=(volt-self._calib[1])/self._calib[0]
+        self._display.clear()
+        val,lett=self.format(field)
+        self._display.write(f"{val:.2f}{lett}T")
+        if output:
+            print(field)
         
     @Command(command="MEASure:TEMPerature?")
-    def read_temperature(self):
+    def read_temperature(self, output=True):
         self.temperature=True
         lightsleep(20)
         code=self.read()
@@ -343,28 +398,44 @@ class ADC1220(TestInstrument):
             code-=2**14
         self.temperature=False
         lightsleep(20)
-        print(0.03125*code)
+        self._display.clear()
+        self._display.write(f"{0.03125*code:.2f}C")
+        if output:
+            print(0.03125*code)
         
-    @Command(command="MEASure[:FieLD]:CALibration?")
+    @Command(command="MEASure[:FieLD]:CALibration[:LINear]?")
     def read_calibration(self):
-        print(self._calib)
+        print(self._calib[0])
 
-    @Command(command="MEASure[:FieLD]:CALibration",parameters=(float,))
+    @Command(command="MEASure[:FieLD]:CALibration:OFFset?")
+    def read_calibration_offset(self):
+        print(self._calib[1])
+
+    @Command(command="MEASure[:FieLD]:CALibration[:LINear]",parameters=(float,))
     def set_calibration(self,value):
-        rng=2.048/(self.gain*self._calib)
-        self._calib=value
+        rng=(2.048-abs(self._calib[1]))/(self.gain*self._calib[0])
+        self._calib=value, self._calib[1]
         with open("calibration.txt","w") as calib:
-            calib.write(f"{value}\n")
+            calib.write(f"{self,_calib[0]},{self._calib[1]}\n")
         self.set_range(rng)
+
+    @Command(command="MEASure[:FieLD]:CALibration:OFFset",parameters=(float,))
+    def set_calibration_offset(self,value):
+        self._calib=self._valib[0],value
+        rng=(2.048-abs(self._calib[1]))/(self.gain*self._calib[0])
+        with open("calibration.txt","w") as calib:
+            calib.write(f"{self,_calib[0]},{self._calib[1]}\n")
+        self.set_range(rng)
+
 
     @Command(command="MEASure[:FieLD]:RANGe?")
     def read_range(self):
-        max_f=2.048/(self.gain*self._calib)
+        max_f=(2.048-abs(self._calib[1]))/(self.gain*self._calib[0])
         print(max_f)
 
     @Command(command="MEASure[:FieLD]:RANGe",parameters=(Float(min=0,max=inf),))
     def set_range(self, value):
-        value=abs(value)*self._calib
+        value=abs(value)*self._calib[0]-self.calib[1]
         value=max(2.048/128,min(2.048,value))
         for gain in [128,64,32,16,8,4,2,1]:
             if value<=2.048/gain:
@@ -381,4 +452,24 @@ class ADC1220(TestInstrument):
             if l>=level:
                 break
         self.idac_level=l
+        
+    @Command(command="DISPlay:MODE", parameters=((Enum(field="FieLD", volt="VOLTage", temp="TEMPerature", hres="HallRESistance",raw="RAW",message="MESSage")),))
+    def set_display_mode(self,mode):
+        self._mode=mode
+        
+    @Command(command="DISPlay:MODE?")
+    def get_display_mode(self):
+        mapping={"field":"FIELD","volt":"VOLTAAGE","temp":"TEMPERATURE","hres":"HALLRESISTANCE"}
+        print(mapping.get(self._mode,"NONE"))
     
+    @Command(command="DISPlay:MESSage", parameters=(str,))
+    def set_display_message(self,string):
+        self._display_message=string
+        
+    @Command(command="DISPlay:MESSage?")
+    def get_display_message(self):
+        print(self._display_message)
+        
+    @Command(command="DISPlay:COLour",parameters=(str,))
+    def sef_display_colour(self,colour):
+        self._display.bgcolour(colour)

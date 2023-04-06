@@ -3,9 +3,11 @@ try:
 except ImportError:
     import asyncio
 import sys
+from math import floor,log10
 
 from decorators import BuildCommands, Command, prep_plist, tokenize, prep_part
 from exceptions import SCPIError, CommandError, DataTypeError, ParameterDataOutOfRange
+
 
 inf=float('inf')
 nan=float('nan')
@@ -105,14 +107,15 @@ class Enum(object):
             kargs[arg]=ix
         self.mapping={}
         for label,value in kargs.items():
-            short,long,_=prep_part(label)
-            self.mapping[short]=value
-            self.mapping[long]=value
+            short,long,_=prep_part(value)
+            self.mapping[short]=label
+            self.mapping[long]=label
 
-    def __vall__(self,value):
-        value=value.upper*()
-        if value in self.mappoing:
-            return self.napping[value]
+    def __call__(self,value):
+        value=value.upper()
+        if value in self.mapping:
+            ret = self.mapping.get(value,"Ooops")
+            return ret
         raise DataTypeError
 
 
@@ -129,7 +132,7 @@ class Instrument(object):
     """
 
     version = "0.0.1"
-
+    
     def __init__(self):
         """Fire up an Async stream reader for sys,stdin and start reading commands."""
         self.current_node=None
@@ -141,6 +144,12 @@ class Instrument(object):
     def run(self):
         self.reader=asyncio.StreamReader(sys.stdin)
         asyncio.run(self.read_commands())
+        
+    def exit(self):
+        """Exit the driver."""
+        for name,task in self.tasks:
+            task.cancel()
+        sys.exit(self.stb)
 
     async def ainput(self):
         """Async read input from STDIN for reading commands."""
@@ -208,7 +217,35 @@ class Instrument(object):
                         self.error_q.append(e)
                         continue
         except KeyboardInterrupt:
-            return True
+            self.exit()
+            
+    @staticmethod
+    def format(value):
+        mag_letters={-30:"q",
+                     -27:"r",
+                     -24:"y",
+                     -21:"z",
+                     -18:"a",
+                     -15:"f",
+                     -12:"p",
+                     -9:"n",
+                     -6:"u",
+                     -3:"m",
+                     0:"",
+                     3:"k",
+                     6:"M",
+                     9:"G",
+                     12:"T",
+                     15:"P",
+                     18:"E",
+                     21:"Z",
+                     24:"Y",
+                     27:"R",
+                     30:"Q"}
+        mag=3*(floor(log10(abs(value)))//3)
+        if mag in mag_letters:
+            value=value/10**mag
+        return value,mag_letters.get(mag,"")        
 
 
 @BuildCommands
@@ -360,8 +397,10 @@ class SCPI(Instrument):
     @Command(command="*RST")
     def reset(self):
         """This needs to be overriden to actually do the reset."""
-        for task in self.tasks:
-            task.cancel()
+        for name, task in self.tasks:
+            if not name.startswith("_"): #Cancel non system tasks
+                task.cancel()
+        self.tasks=[x for x in self.tasks if x[0].startswith("_")] #remove non system tasks
         self.cls()
 
     @Command(command="*SRE",parameters=(int,))
@@ -392,7 +431,7 @@ class SCPI(Instrument):
         """Holduntil all tasks have stopped."""
         while True:
             for name,task in self.tasks:
-                if name in ["opc","opcq","wait"]:
+                if name in ["opc","opcq","wait"] or name.startswith("_"):
                     continue
                 if not task.done():
                     break
@@ -467,11 +506,8 @@ class TestInstrument(SCPI):
         print("Done")
 
     @Command(command="SYSTem:EXIT")
-    def exit(self):
-        """Exit the driver."""
-        for name,task in self.tasks:
-            task.cancel()
-        sys.exit(self.stb)
+    def exit_instrument(self):
+        self.exit()
 
     @Command(command="SYSTem:PRINt",parameters=(str,))
     def print(self,string):

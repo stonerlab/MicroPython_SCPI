@@ -1,4 +1,3 @@
-from led import LED
 from ad1220 import ADC1220
 while True:
     try:
