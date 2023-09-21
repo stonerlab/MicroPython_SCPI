@@ -4,7 +4,13 @@ AD1220 driver
 """
 import math
 import os
-from machine import SPI, Pin, lightsleep
+import sys
+from machine import SPI, Pin
+if int(sys.version.split(".")[3])>=20: # Lightsleep in 1.20 seems to put the RP2 to sleep forever
+    from utime import sleep_ms as lightsleep
+else:
+    from machine import lightsleep
+
 import uasyncio as asyncio
 
 from scpi import TestInstrument, Float, inf, Enum
