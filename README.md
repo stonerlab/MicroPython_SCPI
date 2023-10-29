@@ -32,8 +32,18 @@ A simple example:
             await asyncio.sleep(10)
             print(string)
 
+    if __name__ == "__main__":
+      while True:
+      try:
+          MyInstr().run()
+      except KeyboardInterrupt:
+          break
+      except Exception as e:
+          pass
+
 This adds a new SCPI command SYST:EXAM str - or SYSTEM:EXAMPLE str or SYST:EXAM:ECHO str or SYSTEM:EXAMPLE:ECHO str
-that will sleep for 10 seconds and then simple echo its parameter back to the user.
+that will sleep for 10 seconds and then simple echo its parameter back to the user. If the code is exectured as the top level file (e.g. by being saved as `main.py`, it will execute the instrument loop. As well as implementing the 
+SYST:EXAM etc commands, it also implements the standard IEEE488.2 *IDN?, *RST etc commands and a SCPI commands related to operational condition registers and an error message queue - as required by the SCPI-99 Specification.
 
 # Warning !
 
