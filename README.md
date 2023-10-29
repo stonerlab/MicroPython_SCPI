@@ -19,8 +19,7 @@ for more details.
 A simple example:
 
     import uasyncio as asyncio
-    from scpi import SCPI
-    from decorators import Command, BuildCommands
+    from instr import SCPI, Command, BuildCommands
 
     @BuildCommands
     class MyInstr(SCPI):
