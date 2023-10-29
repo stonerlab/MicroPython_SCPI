@@ -18,6 +18,28 @@ from math import floor, log10
 from .decorators import BuildCommands, Command, prep_plist, tokenize
 from .exceptions import SCPIError, CommandError
 
+async def ainput(repl=None):
+    """Asynchornous input function.
+
+    Args:
+        repl (str, optional): Prompt for the input. Defaults to None.
+
+    Returns:
+        cmd (str): Input string recieved from stdin.
+
+    """
+    cmd = ""
+    reader = asyncio.StreamReader(sys.stdin)
+
+    while True:
+        if repl:
+            print(repl,end=None)
+        cmd = await reader.readline()
+        cmd = cmd.decode().strip()
+        if cmd != "":
+            break
+    return cmd
+
 
 class Instrument(object):
 
@@ -31,35 +53,37 @@ class Instrument(object):
     version = "0.0.1"
 
     def __init__(self, debug=False):
-        """Fire up an Async stream reader for sys,stdin and start reading commands."""
+        """Initialise some instrument parameters, but do not start the main event loop"""
         self.current_node = None
         self.error_q = []
         self.tasks = []
         self.lock = asyncio.Lock()
         self.debug = debug
+        self.stb = 0
 
     def run(self):
-        self.reader = asyncio.StreamReader(sys.stdin)
+        """Fire up the main event loop task for the instrument."""
         asyncio.run(self.read_commands())
 
     def exit(self):
-        """Exit the driver."""
+        """Exit the instrument."""
         for name, task in self.tasks:
             task.cancel()
         sys.exit(self.stb)
 
-    async def ainput(self):
-        """Async read input from STDIN for reading commands."""
-        cmd = ""
-        while True:
-            cmd = await self.reader.readline()
-            cmd = cmd.decode().strip()
-            if cmd != "":
-                break
-        return cmd
-
     def parse_cmd(self, command):
-        """Find the command in the command table and get the correspoindig method name and parameter list."""
+        """Find the command in the command table and get the correspoindig method name and parameter list.
+
+        Args:
+            command (str): A complete command string wuith parameters.
+
+        Raises:
+            CommandError: Raised when the parser can't match the command from either the current node or root..
+
+        Returns:
+            str: The name of an executable attriobute (i.e. method) to run for this command.
+            plist (list of str): The command parameters a a list of strings, dealing with quotes and quoted commas.
+        """
         while True:  # We potentially sscan the dictionary multiple times to locale a relative node
             cmd = command  # Restart processing with whole command
             cmd, plist = prep_plist(cmd)  # Get the parameters off the command first
@@ -88,10 +112,30 @@ class Instrument(object):
             return read_from.get(cmd, None), plist
 
     async def read_commands(self):
-        """Main dispatcher of commands."""
+        """Main event loop for the instrument.
+
+        Raises:
+            CommandError: Raised if the instrument is sent an unrecognised command.
+
+        Returns:
+            None.
+
+        Notes:
+            This function is run asynchronously by the run() method. It will wait asynchronously for an input line from
+            the user via stdin, split the command on semi-colons and then parse it. After parsing, it looks for an
+            attribute of the matching name. That sttribute should have additional metadata that determines how the
+            command should run (synchronously, asynchronously, asynchronously but awaited). The attribute also provides
+            information about the parameters to allow the parameter list (which are strings) to be converted to the
+            correct python types.
+
+            THe main loop also looks for asynchronous tasks that have completed and removes them from the list of
+            currently running tasks.
+
+            Any SCPIError exceptions that are raised are handled by appending to the errors list for the instrument.
+        """
         try:  # Catch KeyBoard Interrupt
             while True:  # Main loop
-                cmd_String = await self.ainput()
+                cmd_String = await ainput()
                 for cmd in tokenize(cmd_String, ";"):  # Deal with multiple commands
                     try:
                         cmd_runner, plist = self.parse_cmd(cmd)
