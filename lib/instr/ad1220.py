@@ -15,7 +15,8 @@ try:
 except ImportError:
     import asyncio
 
-from .scpi import TestInstrument, Float, inf, Enum
+from .scpi import TestInstrument
+from .types import Float, inf, Enum
 from .decorators import BuildCommands, Command
 from .RGB1602 import Display
 

@@ -11,4 +11,4 @@ from .decorators import BuildCommands, Command
 from .types import Int, Float, Enum, Boolean, OnOffFloat, isnan
 
 __versioninfo__=(0,2,0)
-__version__ = ".".join(__versioninfo__)
+__version__ = ".".join([str(x) for x in __versioninfo__])
