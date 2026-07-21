@@ -1,9 +1,27 @@
 """decorators for constructing SCPI driver class."""
-__all__ = ["BuildCommands", "Command", "prep_plist"]
+__all__ = ["BuildCommands", "Command", "SYNC", "BACKGROUND", "AWAITED", "prep_plist"]
 from copy import deepcopy
 import re
 
 from .exceptions import TooFewParameters, TooManyParameters, DataTypeError, CommandSyntaxError
+
+
+# Named execution modes.  The integer values preserve the public async_call=0/1/2
+# API used by existing applications.
+SYNC = 0
+BACKGROUND = 1
+AWAITED = 2
+
+
+def _is_coroutine_function(fnc):
+    """Return whether *fnc* is an async function without requiring inspect."""
+    try:
+        from inspect import iscoroutinefunction
+
+        return iscoroutinefunction(fnc)
+    except ImportError:  # MicroPython does not provide the full inspect module.
+        code = getattr(fnc, "__code__", None)
+        return bool(getattr(code, "co_flags", 0) & 0x80)
 
 
 def tokenize(string, splitter):
@@ -62,7 +80,7 @@ def expand_optional(command):
     return commands
 
 
-def Command(command="", async_call=False, parameters=tuple()):
+def Command(command="", async_call=None, parameters=tuple()):
     """Mark the class method as implementing a SCPI Command.
 
     Keyword Arguments:
@@ -88,10 +106,21 @@ def Command(command="", async_call=False, parameters=tuple()):
 
     def _command(fnc):
         """Real decorator for function."""
-        if not async_call and fnc.__class__.__name__ == "generator":
-            async_op = 1  # Call with await
+        is_async = _is_coroutine_function(fnc)
+        if async_call is None:
+            async_op = BACKGROUND if is_async else SYNC
+        elif async_call in (False, SYNC):
+            if is_async:
+                raise TypeError(
+                    f"Async command handler {fnc.__name__} cannot use synchronous execution mode"
+                )
+            async_op = SYNC
+        elif async_call in (True, BACKGROUND):
+            async_op = BACKGROUND
+        elif async_call == AWAITED:
+            async_op = AWAITED
         else:
-            async_op = async_call
+            raise ValueError("async_call must be SYNC/0, BACKGROUND/1, or AWAITED/2")
         ret = Executable(fnc, async_call=async_op, command=command, parameters=parameters)
         return ret
 
@@ -119,7 +148,11 @@ def BuildCommands(cls):
             setattr(cls, "command_map", dict())
         else:
             setattr(cls, "command_map", deepcopy(cls.command_map))
-    for name, method in [(x, getattr(cls, x)) for x in dir(cls) if isinstance(getattr(cls, x), Executable)]:
+    for name, method in [
+        (x, getattr(cls, x))
+        for x in dir(cls)
+        if not x.startswith("_scpi_") and isinstance(getattr(cls, x), Executable)
+    ]:
         setattr(cls, name, method.fnc)  # restore the original method
         setattr(cls, f"_scpi_{name}", method)  # The shadow SCPI method
         commands = expand_optional(method.command)
@@ -175,8 +208,14 @@ class Executable(object):
         for ix, (arg, param) in enumerate(zip(plist, self.parameters)):
             try:
                 if param is bool:
-                    arg = arg.upper().replace("OFF", "False").replace("0", "False").replace("NO", "False")
-                plist[ix] = param(arg)
+                    # Import lazily to avoid the decorators/types import cycle.
+                    from .types import Boolean
+
+                    plist[ix] = Boolean(arg)
+                else:
+                    plist[ix] = param(arg)
+            except DataTypeError:
+                raise
             except (TypeError, ValueError):
                 raise DataTypeError
         return plist

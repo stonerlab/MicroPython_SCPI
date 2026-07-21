@@ -82,6 +82,23 @@ def Boolean(value):
     raise DataTypeError
 
 
+def _validate_bound(value, name, integer=False):
+    """Validate a numeric converter bound at construction time."""
+    expected = int if integer else (int, float)
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, expected) or value != value:
+        typename = "integer" if integer else "numeric"
+        raise TypeError(f"{name} must be a {typename} value or None")
+
+
+def _validate_bounds(minimum, maximum, integer=False):
+    _validate_bound(minimum, "min", integer)
+    _validate_bound(maximum, "max", integer)
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ValueError("min must be less than or equal to max")
+
+
 class Float(object):
 
     """Creates a callable to convert string representation of a float to an float with optional special strings.
@@ -99,6 +116,7 @@ class Float(object):
 
     def __init__(self, min=None, max=None, nan=None, default=None, **kargs):
         """Set values to be used for MIN MAX NAN and DEF."""
+        _validate_bounds(min, max)
         self._mapping = {
             "MIN": min,
             "MINIMUM": min,
@@ -130,11 +148,13 @@ class Float(object):
             return self._mapping[value.strip().upper()]
         try:
             ret = float(value)
-            if isinstance(self._mapping["MIN"], float) and ret < self._mapping["MIN"]:
+            if self._mapping["MIN"] is not None and ret < self._mapping["MIN"]:
                 raise ParameterDataOutOfRange
-            if isinstance(self._mapping["MAX"], float) and ret > self._mapping["MAX"]:
+            if self._mapping["MAX"] is not None and ret > self._mapping["MAX"]:
                 raise ParameterDataOutOfRange
             return ret
+        except ParameterDataOutOfRange:
+            raise
         except (TypeError, ValueError):
             raise DataTypeError
 
@@ -155,6 +175,7 @@ class Int(object):
 
     def __init__(self, min=None, max=None, default=None, **kargs):
         """Set values to be used for MIN MAX NAN and DEF."""
+        _validate_bounds(min, max, integer=True)
         self._mapping = {
             "MIN": min,
             "MINIMUM": min,
@@ -185,11 +206,13 @@ class Int(object):
             return self._mapping[value.strip().upper()]
         try:
             ret = int(value)
-            if isinstance(self._mapping["MIN"], float) and ret < self._mapping["MIN"]:
+            if self._mapping["MIN"] is not None and ret < self._mapping["MIN"]:
                 raise ParameterDataOutOfRange
-            if isinstance(self._mapping["MAX"], float) and ret > self._mapping["MAX"]:
+            if self._mapping["MAX"] is not None and ret > self._mapping["MAX"]:
                 raise ParameterDataOutOfRange
             return ret
+        except ParameterDataOutOfRange:
+            raise
         except (TypeError, ValueError):
             raise DataTypeError
 
@@ -200,16 +223,25 @@ class Enum(object):
     def __init__(self, *args, **kargs):
         """Create an obkect with a mapping between string labels and values.
 
-        Either pass keyword arguments mapping labels to values or positional
-        arguments get mapped to 0,1,2...
+        Keyword arguments map SCPI labels to Python values. Positional labels
+        map their short and long forms back to the original label.
         """
-        for ix, arg in enumerate(args):
-            kargs[arg] = ix
         self.mapping = {}
-        for label, value in kargs.items():
-            short, long, _ = prep_part(value)
-            self.mapping[short] = label
-            self.mapping[long] = label
+        entries = [(label, label) for label in args]
+        entries.extend(kargs.items())
+        for label, python_value in entries:
+            if not isinstance(label, str):
+                raise TypeError("Enum labels must be strings")
+            short, long, remainder = prep_part(label)
+            if remainder:
+                raise ValueError("Enum labels cannot contain command nodes")
+            aliases = (short.upper(), long.upper())
+            if aliases[0] == aliases[1]:
+                aliases = aliases[:1]
+            for alias in aliases:
+                if alias in self.mapping:
+                    raise ValueError(f"Duplicate Enum alias: {alias}")
+                self.mapping[alias] = python_value
 
     def __call__(self, value):
         """Do the conversion of a string to a value by consulting the mapping defined by the constructor.
@@ -225,10 +257,9 @@ class Enum(object):
 
         """
         try:
-            value = value.upper()
+            value = value.strip().upper()
         except (TypeError, ValueError, AttributeError):
             raise DataTypeError
         if value in self.mapping:
-            ret = self.mapping.get(value, "Ooops")
-            return ret
+            return self.mapping[value]
         raise DataTypeError

@@ -19,27 +19,21 @@ for more details.
 A simple example:
 
     import uasyncio as asyncio
-    from instr import SCPI, Command, BuildCommands
+    from instr import BACKGROUND, SCPI, Command, BuildCommands
 
     @BuildCommands
     class MyInstr(SCPI):
 
         """A trivial example."""
 
-        @Command(command="SYSTem:EXAMple[:ECHO]", parameters=(str,))
-        await def example(self, string):
+        @Command(command="SYSTem:EXAMple[:ECHO]", async_call=BACKGROUND, parameters=(str,))
+        async def example(self, string):
             """An example method."""
             await asyncio.sleep(10)
             print(string)
 
     if __name__ == "__main__":
-      while True:
-      try:
-          MyInstr().run()
-      except KeyboardInterrupt:
-          break
-      except Exception as e:
-          pass
+        MyInstr().run()
 
 This adds a new SCPI command SYST:EXAM str - or SYSTEM:EXAMPLE str or SYST:EXAM:ECHO str or SYSTEM:EXAMPLE:ECHO str
 that will sleep for 10 seconds and then simply echo its parameter back to the user. If the code is exectured as the top level file (e.g. by being saved as `main.py`, it will execute the instrument loop. As well as implementing the 
@@ -61,14 +55,14 @@ relative to the parent of the last executed command node.
 
 What is not supported ;out of the box' is units on parameters and expressions. In principle both could be implemented
 by providing parameter conversion functions that were aware of either. The provided parameter conversion functions are:
-- **scpi.Float**(min=\<val\>,max=\<val\>,nan=\<val\>,default=\<val\>) supports conversions with optinal MIN, MAX, NAN and DEF
-  values. If the min or max values are floats, then the input value is also range checked against the corresponding limit
-  and a ParameterDataOutOfRange error is raised.
-- **scpi.Int**(max=\<val\>,max=\<val\>, default=\<val\>) similarly to scpi.Float converts values to integers with limits and default
+- **scpi.Float**(min=\<val\>,max=\<val\>,nan=\<val\>,default=\<val\>) supports conversions with optional MIN, MAX, NAN and DEF
+  values. Every numeric min or max is enforced inclusively and a ParameterDataOutOfRange error is raised for values outside it.
+- **scpi.Int**(min=\<val\>,max=\<val\>, default=\<val\>) similarly to scpi.Float converts values to integers with limits and default
   value.
-- **scpi.Bool**() converts "1" or "ON" to a True and "0" and "OFF" to a False
-- **scpi.Enum**(LABel1=\<val\>,LABel2=\<val\>...) builds a mappin between labels with long and shrt forms and a value. Input
-  values are converted to UPPERCASE beore being compared against the possible mapping values. Unmatched labels get a
+- **scpi.Boolean** converts `ON`, `1`, `YES`, and `TRUE` to True and `OFF`, `0`, `NO`, and `FALSE` to False. A built-in
+  `bool` command parameter uses the same conversion for compatibility.
+- **scpi.Enum**(LABel1=\<val\>,LABel2=\<val\>...) maps SCPI labels, including their long and short forms, to Python values.
+  Positional labels map to themselves. Input values are converted to uppercase before matching. Unmatched labels get a
   DataTypeError.
 
 # Details
@@ -100,7 +94,7 @@ tasks have completed. Finally *RST will cancel all running tasks before clearing
 
 Synopsis:
 
-    @Command(command=<SCPI command string>, async_call=bool|int, parameters=tuple)
+@Command(command=<SCPI command string>, async_call=SYNC|BACKGROUND|AWAITED, parameters=tuple)
 
 The \<SCPI Command string\> tries to be similar to how SCPI commands are documented in manuals - a mixture of short
 UPPer case letters defining a command abreviation and a verbose command defines in mixed case. As with all SCPI
@@ -108,17 +102,27 @@ commands, they are organised in a tree like structure with : separating the leve
 be enclosed in []. It is possible to have both multiple and nested optional parts of the command string and all the
 permutations will be supported.
 
-The async_call parameter is optional and can fine tune how tthe method should be called. If it is False, or not given
-and the method is not a *generator* then the method will be called synchronously. This means the microcontroller will
+The async_call parameter is optional and controls how the method is called. Use the exported `SYNC`, `BACKGROUND`, and
+`AWAITED` names; the compatibility values `0`, `1`, and `2` are also accepted. If it is not given, coroutine functions
+are detected where the runtime supports it and run in the background; ordinary functions run synchronously. Synchronous execution
+means the microcontroller will
 only run that method and will not respond to other commands or let other commands tunning in the background run. For
-obvious reasons, therefore, you should ensure that all synchronous methods are quick! If the async_call parameter is
-not given and the method is a *generator*, or the parameter is set to 1, the method will be rund as a background task
+obvious reasons, therefore, you should ensure that all synchronous methods are quick! With `BACKGROUND`, the method runs as a background task
 with uasyncio.create_task(). Such a mthod will run when the microcontroller is waiting for further commands or in
-parallel with other tasks that have yielded time. Finally if you set the async_call to 2, then the method will be run
-asynchornously, but with a blocking uasyncio.run() call. This will allow other backgrounded commands to run (so long as
+parallel with other tasks that have yielded time. With `AWAITED`, the coroutine is awaited before another command is processed. This will allow other backgrounded commands to run (so long as
  your command yields the processor with a uasyncio.sleep() or similar) but will not all any further commands to be
 processed. This is used, for example, for the *OPC? and *WAI commands to block further commands until the current
 operations are all finshed.
+
+Async execution modes must return an awaitable. Conversely, a synchronous command that returns an awaitable is rejected
+with a controlled execution error so a coroutine cannot be silently dropped.
+
+## Compatibility notes for the converter/dispatch fixes
+
+- `bool` parameters now interpret SCPI false tokens correctly instead of relying on Python string truthiness.
+- `Int` and `Float` enforce integer-valued bounds as well as floating-point bounds; boolean and invalid bounds are rejected at construction.
+- `Enum` keyword arguments are now label-to-value mappings, for example `Enum(POWer="power")`. Applications written around the former reversed behavior must swap their keyword names and values.
+- Async handlers should declare `BACKGROUND` or `AWAITED` explicitly for portability to MicroPython runtimes that cannot identify coroutine functions reliably.
 
 The parser will handle arguments being passed to commands. At present it cannot handle optional parameters and strings
 that contain , should be " quoted ". The parameters parameter takes a tuple of callabel functions which will be used to

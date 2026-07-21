@@ -15,8 +15,13 @@ except ImportError:  # Desktop python or micropython>=1.21
 import sys
 from math import floor, log10
 
-from .decorators import BuildCommands, Command, prep_plist, tokenize
-from .exceptions import SCPIError, CommandError
+from .decorators import AWAITED, BACKGROUND, BuildCommands, Command, prep_plist, tokenize
+from .exceptions import SCPIError, CommandError, CommandExecutionError
+
+
+def _is_awaitable(value):
+    """Portable awaitable check for CPython and MicroPython coroutine objects."""
+    return hasattr(value, "__await__") or value.__class__.__name__ in ("coroutine", "generator")
 
 async def ainput(repl=None):
     """Asynchornous input function.
@@ -145,13 +150,7 @@ class Instrument(object):
                             raise CommandError
                         cmd_runner = getattr(self, cmd_runner)
                         plist = cmd_runner.prep_parameters(plist)
-                        real_command = getattr(self, cmd_runner.name, cmd_runner)
-                        if cmd_runner.async_call == 1:  # Run as async task, continue to process requests
-                            self.tasks.append((cmd_runner.name, asyncio.create_task(real_command(*plist))))
-                        elif cmd_runner.async_call == 2:  # async task, but block executing more tasks for now
-                            await real_command(*plist)
-                        else:  # Non async task
-                            real_command(*plist)
+                        await self._dispatch_command(cmd_runner, plist)
                         done = list(reversed([ix for ix, task in enumerate(self.tasks) if task[1].done()]))
                         for ix in done:  # Dead task collection
                             del self.tasks[ix]
@@ -160,6 +159,27 @@ class Instrument(object):
                         continue
         except KeyboardInterrupt:
             self.exit()
+
+    async def _dispatch_command(self, cmd_runner, plist):
+        """Execute one prepared command according to its declared execution mode."""
+        real_command = getattr(self, cmd_runner.name, cmd_runner)
+        result = real_command(*plist)
+        if cmd_runner.async_call in (BACKGROUND, AWAITED):
+            if not _is_awaitable(result):
+                raise CommandExecutionError(
+                    f"Command {cmd_runner.name} did not return an awaitable"
+                )
+            if cmd_runner.async_call == BACKGROUND:
+                self.tasks.append((cmd_runner.name, asyncio.create_task(result)))
+            else:
+                await result
+        elif _is_awaitable(result):
+            close = getattr(result, "close", None)
+            if close is not None:
+                close()
+            raise CommandExecutionError(
+                f"Command {cmd_runner.name} returned an awaitable in synchronous mode"
+            )
 
     @staticmethod
     def format(value):
@@ -186,10 +206,12 @@ class Instrument(object):
             27: "R",
             30: "Q",
         }
-        mag = 3 * (floor(log10(abs(value))) // 3)
-        if mag in mag_letters:
-            value = value / 10**mag
-        return value, mag_letters.get(mag, "")
+        absolute = abs(value)
+        if absolute == 0 or absolute == float("inf") or value != value:
+            return value, ""
+        mag = 3 * (floor(log10(absolute)) // 3)
+        mag = max(min(mag, 30), -30)
+        return value / 10**mag, mag_letters[mag]
 
 
 @BuildCommands
@@ -231,18 +253,27 @@ class SCPI(Instrument):
             self.oper_event = value & self.oper_enab
 
     @property  # Reading event register clears it.
-    def open_event(self):
+    def oper_event(self):
         ret = self._oper_event
         self._oper_event = 0
         return ret
 
-    @open_event.setter  # Writing the event regist might also change the stb
+    @oper_event.setter  # Writing the event regist might also change the stb
     def oper_event(self, value):
         self._oper_event = value
         if value != 0:
             self.stb |= 128
         if self.service_enab & 128:
             self.stb |= 64
+
+    @property
+    def open_event(self):
+        """Deprecated compatibility alias for the misspelled operation event property."""
+        return self.oper_event
+
+    @open_event.setter
+    def open_event(self, value):
+        self.oper_event = value
 
     @property
     def ques_reg(self):
@@ -299,7 +330,7 @@ class SCPI(Instrument):
         self.oper_enab = 0
         self._oper_event = 0
         self._ques_reg = 0
-        self._qyes_event = 0
+        self._ques_event = 0
         self.ques_enab = 0
         self._event_reg = 0
         self.event_enab = 0
@@ -335,7 +366,7 @@ class SCPI(Instrument):
         """Implements *IDN?"""
         print(f"Raspberry Pico (MicroPython),{self.__class__.__name__},,{sys.version.split(' ')[2]}:{self.version}")
 
-    @Command(command="*OPC")
+    @Command(command="*OPC", async_call=BACKGROUND)
     async def opc(self):
         """Keep checking for the currently executing tasks to finish."""
         tasks = [(name, x) for name, x in self.tasks if name not in ["opcq", "opc", "wait"]]
@@ -348,7 +379,7 @@ class SCPI(Instrument):
             await asyncio.sleep(0.1)
         self.event_reg |= 1
 
-    @Command(command="*OPC?", async_call=2)
+    @Command(command="*OPC?", async_call=AWAITED)
     async def opcq(self):
         """Block until all tasks are done."""
         tasks = [(name, x) for name, x in self.tasks if name not in ["opcq", "opc", "wait"]]
@@ -393,7 +424,7 @@ class SCPI(Instrument):
         """Really a NOP !"""
         print(0)
 
-    @Command(command="*WAI", async_call=2)
+    @Command(command="*WAI", async_call=AWAITED)
     async def wait(self):
         """Holduntil all tasks have stopped."""
         while True:
@@ -467,7 +498,7 @@ class TestInstrument(SCPI):
     - SYSTem:DEBUg? - Check running asynch tasks
     """
 
-    @Command(command="SYSTem:SLEEP", parameters=(float,))
+    @Command(command="SYSTem:SLEEP", async_call=BACKGROUND, parameters=(float,))
     async def sleep(self, sleep_time):
         """Simply sleep for sleep_time seconds then print done."""
         if self.stb & 1:

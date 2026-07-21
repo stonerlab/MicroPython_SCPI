@@ -474,12 +474,12 @@ class ADC1220(TestInstrument):
         parameters=(
             (
                 Enum(
-                    field="FieLD",
-                    volt="VOLTage",
-                    temp="TEMPerature",
-                    hres="HallRESistance",
-                    raw="RAW",
-                    message="MESSage",
+                    FieLD="field",
+                    VOLTage="volt",
+                    TEMPerature="temp",
+                    HallRESistance="hres",
+                    RAW="raw",
+                    MESSage="message",
                 )
             ),
         ),

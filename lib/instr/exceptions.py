@@ -8,6 +8,7 @@ __all__ = [
     "TooManyParameters",
     "InstrumentBusy",
     "ParameterDataOutOfRange",
+    "CommandExecutionError",
 ]
 
 
@@ -44,6 +45,11 @@ class TooManyParameters(SCPIError):
 class InstrumentBusy(SCPIError):
     code = -200
     message = "Instrument busy"
+
+
+class CommandExecutionError(SCPIError):
+    code = -200
+    message = "Execution error"
 
 
 class ParameterDataOutOfRange(SCPIError):
