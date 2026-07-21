@@ -8,6 +8,10 @@ To use it, you write a subclass of the scpi.SCPI class and implement methods tha
 the instrumnet, you instantiate your class and execute the .run() method. After that the Pico will wait for input
 on the USB COM port and respond when it sees a \n.
 
+The normative requirements for constructors, command handlers, execution modes, task ownership, reset/status behavior,
+and safety callbacks are collected in [`INSTRUMENT_SUBCLASS_CONTRACT.md`](INSTRUMENT_SUBCLASS_CONTRACT.md). Read that
+contract before implementing a hardware-backed subclass.
+
 It is possible to implement the class methods as co-routines that can be executed as seperate tasks, allowing your
 microcontroller to respond to other commands (e.g. status requests) in the meantime.
 
@@ -49,9 +53,25 @@ The full SCPI specification is fairly detailed and has a number of features that
 This code implements a limited, tested subset rather than claiming complete SCPI-1999 or IEEE 488.2 conformance.
 
 Specifically, it supports the common '\*' required IEEE488.2 commands. It supports long and short forms of device dependent
-commands and optional nodes and optional numeric suffixes. Commands can be concatendated with semi-colons and device
+commands and optional nodes. Commands can be concatendated with semi-colons and device
 dependent commands can be absolute from the root node of the command tree (with the initial colon being optional) or
 relative to the parent of the last executed command node.
+
+## Command grammar and channels
+
+Numeric suffixes are not inferred from command headers. A digit is accepted only when it is part of an explicitly declared
+header, such as `OUTput1`. For channel-oriented commands, define the channel as a normal parameter so that conversion and
+bounds checking remain explicit:
+
+    @Command(
+        command="OUTPut:LEVel",
+        parameters=(Int(min=0, max=7), Float(min=0, max=100)),
+    )
+    def set_level(self, channel, level):
+        ...
+
+This accepts `OUTPUT:LEVEL 2,50`; it does not derive `OUTPUT2:LEVEL 50`. Existing applications with literal numbered
+headers remain supported because those digits are part of their declared command strings.
 
 What is not supported ;out of the box' is units on parameters and expressions. In principle both could be implemented
 by providing parameter conversion functions that were aware of either. The provided parameter conversion functions are:
@@ -132,6 +152,9 @@ Queries cannot use `BACKGROUND`, because that could reorder their responses; use
 
 ## Runtime safety and lifecycle
 
+This section is an overview. [`INSTRUMENT_SUBCLASS_CONTRACT.md`](INSTRUMENT_SUBCLASS_CONTRACT.md) is authoritative for
+subclass implementations.
+
 `Instrument` accepts optional `fail_safe`, `diagnostic_handler`, and `disconnect_handler` callbacks. A fail-safe callback
 has the signature `(command_name, exception)` and should disable hazardous outputs. A diagnostic callback has the same
 signature and must write only to a separate diagnostic sink, never the SCPI response stream. The disconnect callback is
@@ -207,3 +230,11 @@ Note that this scheme does have a limitation of only supporting single inheriten
 commands. This is another limitation to be addressed in a later version! On the otherhand, MicroPython itself has some
 significant difference in how multiple inheritance is done from CPython and the offiical advice is to avoid complex
 class heirarchies - so perhas it's better to stick to single inheritance anyway!'
+
+Command maps are validated before they are attached to the class. Collisions between short forms, long forms, optional
+expansions, inherited commands, or terminal aliases raise `CommandMapCollisionError` without leaving a partially built
+class. A subclass may intentionally replace an inherited handler only by declaring the same complete canonical command.
+Changing the command attached to an inherited Python method name is rejected as ambiguous.
+
+See [`MIGRATION.md`](MIGRATION.md) for compatibility guidance and [`CHANGELOG.md`](CHANGELOG.md) for the current release
+summary.

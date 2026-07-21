@@ -11,6 +11,7 @@ __all__ = [
     "CommandExecutionError",
     "QueueOverflow",
     "TransportClosed",
+    "CommandMapCollisionError",
 ]
 
 
@@ -61,6 +62,10 @@ class QueueOverflow(SCPIError):
 
 class TransportClosed(EOFError):
     """Raised when a command transport reaches end-of-file or disconnects."""
+
+
+class CommandMapCollisionError(ValueError):
+    """Raised when two SCPI declarations claim an ambiguous command alias."""
 
 
 class ParameterDataOutOfRange(SCPIError):

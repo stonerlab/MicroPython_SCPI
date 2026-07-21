@@ -65,7 +65,10 @@ class Instrument(object):
 
     """Base class to define the machinery for the REPL and commnd dispatch.
 
-    Nothing in this class should need to be overriden other than the version string.
+    Subclasses must preserve the construction, dispatch, task, transport, and
+    lifecycle requirements documented in INSTRUMENT_SUBCLASS_CONTRACT.md.
+    SCPI devices should normally inherit SCPI rather than this machinery-only
+    base class.
 
     After initialising the instrument, run instr.run() to start the event loop.
     """
@@ -179,6 +182,7 @@ class Instrument(object):
                 read_from = self.current_node
             if cmd[0] == ":":
                 cmd = cmd[1:]  # Strip a leading : if present
+            retry_from_root = False
             while ":" in cmd:  # Split the command into levels
                 parts = cmd.split(":")
                 stem = parts[0].upper()
@@ -186,9 +190,13 @@ class Instrument(object):
                 if isinstance(read_from.get(stem, None), dict):  # There are subcommands to this node
                     read_from = read_from[stem]
                 elif self.current_node is not None:  # Command not here, but we can try again with root node
+                    self.current_node = None
+                    retry_from_root = True
                     break
                 else:  # Failed to find the next level and we were looking from the root node
                     raise CommandError
+            if retry_from_root:
+                continue
             if cmd not in read_from and self.current_node is not None:  # restart from root node
                 self.current_node = None
                 continue
@@ -420,6 +428,10 @@ class SCPI(Instrument):
 
     """Base class implementing the framework's tested IEEE 488.2/SCPI subset.
 
+    Concrete subclasses must follow INSTRUMENT_SUBCLASS_CONTRACT.md, including
+    applying BuildCommands, chaining __init__, and preserving reset/status
+    semantics.
+
     Implements the following commands:
         - *ESE, &ESE?, *ESR
         - *IDN?
@@ -616,7 +628,11 @@ class SCPI(Instrument):
     @Command(command="*OPC", async_call=BACKGROUND)
     async def opc(self):
         """Keep checking for the currently executing tasks to finish."""
-        tasks = [(name, x) for name, x in self.tasks if name not in ["opcq", "opc", "wait"]]
+        tasks = [
+            (name, task)
+            for name, task in self.tasks
+            if name not in ["opcq", "opc", "wait"] and not name.startswith("_")
+        ]
         while True:
             for task in tasks:
                 if not task[1].done():
@@ -629,7 +645,11 @@ class SCPI(Instrument):
     @Command(command="*OPC?", async_call=AWAITED)
     async def opcq(self):
         """Block until all tasks are done."""
-        tasks = [(name, x) for name, x in self.tasks if name not in ["opcq", "opc", "wait"]]
+        tasks = [
+            (name, task)
+            for name, task in self.tasks
+            if name not in ["opcq", "opc", "wait"] and not name.startswith("_")
+        ]
         while True:
             for task in tasks:
                 if not task[1].done():
@@ -641,7 +661,7 @@ class SCPI(Instrument):
 
     @Command(command="*RST", async_call=AWAITED)
     async def reset(self):
-        """This needs to be overriden to actually do the reset."""
+        """Reset framework state; device overrides must await this method once."""
         await self._cancel_tasks()
         self._oper_reg = 0
         self._ques_reg = 0

@@ -230,3 +230,23 @@ def test_opc_query_does_not_set_standard_event():
     instrument = SCPI()
     assert run(instrument._dispatch_command(instrument._scpi_opcq, [])) == 1
     assert instrument.event_reg == 0
+
+
+def test_opc_commands_ignore_persistent_system_tasks():
+    async def scenario():
+        instrument = SCPI()
+        system_task = instrument._start_task("_system", asyncio.sleep(60))
+        try:
+            query_result = await instrument.opcq()
+            await instrument._dispatch_command(instrument._scpi_opc, [])
+            await asyncio.sleep(0)
+            opc_task = next(task for name, task in instrument.tasks if name == "opc")
+            await opc_task
+            return query_result, instrument.event_reg, system_task.done()
+        finally:
+            await instrument._cancel_tasks(include_system=True)
+
+    query_result, event_reg, system_done = run(scenario())
+    assert query_result == 1
+    assert event_reg & 1
+    assert not system_done

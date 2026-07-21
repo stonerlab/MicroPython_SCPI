@@ -396,6 +396,26 @@ Change set 4 was implemented on 2026-07-21. Host transport and response-boundary
 
 The cumulative host result after change set 4 is `106 passed, 1 xfailed`. The expected failure remains the staged F-15 collision test. Pico hardware smoke testing remains outstanding.
 
+Change set 5 was implemented on 2026-07-22. The final host-side compatibility and command-map work resolves F-14 and F-15:
+
+- numeric command suffixes are explicitly documented as unsupported unless the digit is part of the declared header;
+- channel-oriented commands are documented with an explicit, converted channel parameter;
+- command maps and provenance are built off-class and committed only after every declaration validates;
+- duplicate short forms, long forms, optional expansions, terminal aliases, and unsafe inherited changes raise
+  `CommandMapCollisionError` atomically;
+- subclasses may intentionally replace only the same complete canonical command, while existing-handler monkeypatch behavior is
+  preserved;
+- relative-parser root fallback retains the complete command instead of discarding an unknown first node;
+- `MIGRATION.md` and `CHANGELOG.md` describe the compatibility boundary and unreleased framework-hardening work.
+
+The final cumulative host result is `119 passed` with no expected failures. All scheduled host-testable change sets are complete.
+Pico hardware smoke testing and memory-growth evidence remain outstanding before release.
+
+A post-change-set subclass-contract audit was completed on 2026-07-22. `INSTRUMENT_SUBCLASS_CONTRACT.md` now defines the
+construction, command declaration, override, execution, response, task, reset, status, error, safety, and service-ownership
+requirements in one authoritative place. The audit also aligned `*OPC` and `*OPC?` with the established persistent system-task
+contract: underscore-prefixed tasks no longer block operation-complete commands. The current host result is `120 passed`.
+
 ## Recommended implementation sequence
 
 Keep changes reviewable and independently releasable.
