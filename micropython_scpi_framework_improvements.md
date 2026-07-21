@@ -369,6 +369,20 @@ Change set 2 was implemented on 2026-07-21. Host regression coverage now verifie
 
 The cumulative host result after change set 2 is `83 passed, 1 xfailed`. The expected failure remains the staged F-15 collision test. Pico smoke testing remains outstanding.
 
+Change set 3 was implemented on 2026-07-21. The supported subset is defined in `STATUS_MODEL.md`, and host conformance coverage now verifies F-12:
+
+- operation and questionable conditions latch positive transitions independently of their enable masks;
+- event enables derive operation, questionable, and ESB summary bits, while SRE derives and deasserts MSS/RQS consistently;
+- `*ESR?` and device event queries read and clear their latches;
+- `*CLS` clears all event latches and errors without changing conditions/enables or generating new transitions;
+- `STATus:PRESet` changes only operation/questionable status state and leaves tasks, errors, conditions, and standard status intact;
+- `*TST?` replaces the invalid non-query command;
+- ESE/SRE are bounded to 8 bits, operation/questionable enables to 15 bits, and SRE bit 6 is ignored as a derived result;
+- `*RST` awaits task cleanup, resets device conditions, and clears latches/errors while preserving enable registers;
+- `*OPC` latches Standard Event bit 0 after prior work, while `*OPC?` waits without changing ESR.
+
+The cumulative host result after change set 3 is `94 passed, 1 xfailed`. The expected failure remains the staged F-15 collision test. Pico smoke testing remains outstanding.
+
 ## Recommended implementation sequence
 
 Keep changes reviewable and independently releasable.

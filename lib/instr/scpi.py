@@ -18,6 +18,11 @@ from math import floor, log10
 from .decorators import AWAITED, BACKGROUND, BuildCommands, Command, prep_plist, tokenize
 from .error_queue import ErrorQueue
 from .exceptions import CommandError, CommandExecutionError, SCPIError, TransportClosed
+from .types import Int
+
+
+BYTE_MASK = Int(min=0, max=255)
+STATUS_MASK = Int(min=0, max=32767)
 
 
 def _is_awaitable(value):
@@ -98,6 +103,7 @@ class Instrument(object):
     ):
         """Initialise some instrument parameters, but do not start the main event loop"""
         self.current_node = None
+        self._error_summary = False
         self.error_q = ErrorQueue(error_queue_capacity, self._set_error_summary)
         self.tasks = []
         self.lock = asyncio.Lock()
@@ -110,7 +116,11 @@ class Instrument(object):
         self.callback_error = None
 
     def _set_error_summary(self, has_errors):
-        if has_errors:
+        self._error_summary = has_errors
+        update_status = getattr(self, "_update_status_byte", None)
+        if update_status is not None:
+            update_status()
+        elif has_errors:
             self.stb |= 4
         else:
             self.stb &= ~4
@@ -379,7 +389,7 @@ class Instrument(object):
 @BuildCommands
 class SCPI(Instrument):
 
-    """Base class that defines the minimum necessary comands to be SCPI Compatible
+    """Base class implementing the framework's tested IEEE 488.2/SCPI subset.
 
     Implements the following commands:
         - *ESE, &ESE?, *ESR
@@ -389,7 +399,7 @@ class SCPI(Instrument):
         - *RST
         - *SRE, *SRE?
         - *STB?
-        - *TST
+        - *TST?
         - *WAI
         - SYSTem:ERRor[:NEXT]?
         - SYSTem:VERSion?
@@ -410,23 +420,31 @@ class SCPI(Instrument):
 
     @oper_reg.setter  # Setting operational status register might trigger events and stb changes
     def oper_reg(self, value):
+        value &= 0x7FFF
+        self._oper_event |= value & ~self._oper_reg
         self._oper_reg = value
-        if value & self.oper_enab:
-            self.oper_event = value & self.oper_enab
+        self._update_status_byte()
 
     @property  # Reading event register clears it.
     def oper_event(self):
         ret = self._oper_event
         self._oper_event = 0
+        self._update_status_byte()
         return ret
 
     @oper_event.setter  # Writing the event regist might also change the stb
     def oper_event(self, value):
-        self._oper_event = value
-        if value != 0:
-            self.stb |= 128
-        if self.service_enab & 128:
-            self.stb |= 64
+        self._oper_event = value & 0x7FFF
+        self._update_status_byte()
+
+    @property
+    def oper_enab(self):
+        return self._oper_enab
+
+    @oper_enab.setter
+    def oper_enab(self, value):
+        self._oper_enab = value & 0x7FFF
+        self._update_status_byte()
 
     @property
     def open_event(self):
@@ -443,23 +461,31 @@ class SCPI(Instrument):
 
     @ques_reg.setter  # Writing the questionable status register can cause events too
     def ques_reg(self, value):
+        value &= 0x7FFF
+        self._ques_event |= value & ~self._ques_reg
         self._ques_reg = value
-        if value & self.ques_enab:
-            self.ques_event = value & self.ques_enab
+        self._update_status_byte()
 
     @property  # Reading the event register will clear it
     def ques_event(self):
         ret = self._ques_event
         self._ques_event = 0
+        self._update_status_byte()
         return ret
 
     @ques_event.setter  # Writing the event register might change the stb
     def ques_event(self, value):
-        self._ques_event = value
-        if value != 0:
-            self.stb |= 8
-        if self.service_enab & 8:
-            self.stb |= 64
+        self._ques_event = value & 0x7FFF
+        self._update_status_byte()
+
+    @property
+    def ques_enab(self):
+        return self._ques_enab
+
+    @ques_enab.setter
+    def ques_enab(self, value):
+        self._ques_enab = value & 0x7FFF
+        self._update_status_byte()
 
     @property
     def event_reg(self):
@@ -467,48 +493,78 @@ class SCPI(Instrument):
 
     @event_reg.setter  # Reading the standard event register can change the standard event event register
     def event_reg(self, value):
-        self._event_reg = value
-        if value & self.event_enab:
-            self.event_event = value & self.event_enab
+        self._event_reg = value & 0xFF
+        self._update_status_byte()
 
     @property  # Reading the stadnard event event register clears it
     def event_event(self):
-        ret = self._event_event
-        self._event_event = 0
+        ret = self._event_reg
+        self._event_reg = 0
+        self._update_status_byte()
         return ret
 
     @event_event.setter  # Writing the standard event event register may change the stb.
     def event_event(self, value):
-        self._event_event = value
-        if value != 0:
-            self.stb |= 32
-        if self.service_enab & 32:
-            self.stb |= 64
+        self.event_reg = value
+
+    @property
+    def event_enab(self):
+        return self._event_enab
+
+    @event_enab.setter
+    def event_enab(self, value):
+        self._event_enab = value & 0xFF
+        self._update_status_byte()
+
+    @property
+    def service_enab(self):
+        return self._service_enab
+
+    @service_enab.setter
+    def service_enab(self, value):
+        # IEEE 488.2 bit 6 is the MSS/RQS result and is never enabled itself.
+        self._service_enab = value & 0xBF
+        self._update_status_byte()
+
+    def _update_status_byte(self):
+        """Recompute implemented SCPI summary bits and the MSS/RQS bit."""
+        status = self.stb & ~(4 | 8 | 32 | 64 | 128)
+        if self._error_summary:
+            status |= 4
+        if self._ques_event & self._ques_enab:
+            status |= 8
+        if self._event_reg & self._event_enab:
+            status |= 32
+        if self._oper_event & self._oper_enab:
+            status |= 128
+        if status & self._service_enab:
+            status |= 64
+        self.stb = status
 
     def __init__(self, debug=False, **kwargs):
         """Initialise our registeres and other state."""
-        self.stb = 0
         self._oper_reg = 0
-        self.oper_enab = 0
+        self._oper_enab = 0
         self._oper_event = 0
         self._ques_reg = 0
         self._ques_event = 0
-        self.ques_enab = 0
+        self._ques_enab = 0
         self._event_reg = 0
-        self.event_enab = 0
-        self._event_event = 0
-        self.service_enab = 0
+        self._event_enab = 0
+        self._service_enab = 0
         super().__init__(debug, **kwargs)
+        self._update_status_byte()
 
     @Command(command="*CLS")
     def cls(self):
-        """Clear status registers and error queue."""
+        """Clear event latches and errors without changing conditions or enables."""
         self.error_q.clear()
-        self.stb = 0
-        self.ques_reg = 0
-        self.oper_reg = 0
+        self._oper_event = 0
+        self._ques_event = 0
+        self._event_reg = 0
+        self._update_status_byte()
 
-    @Command(command="*ESE", parameters=(int,))
+    @Command(command="*ESE", parameters=(BYTE_MASK,))
     def ese(self, mask):
         """Set Standard Event Enable."""
         self.event_enab = mask
@@ -520,8 +576,8 @@ class SCPI(Instrument):
 
     @Command(command="*ESR?")
     def esrq(self):
-        """Report Standard Event Register."""
-        print(self.event_reg)
+        """Read and clear the Standard Event Status Register."""
+        print(self.event_event)
 
     @Command(command="*IDN?")
     def idnq(self):
@@ -558,9 +614,11 @@ class SCPI(Instrument):
     async def reset(self):
         """This needs to be overriden to actually do the reset."""
         await self._cancel_tasks()
+        self._oper_reg = 0
+        self._ques_reg = 0
         self.cls()
 
-    @Command(command="*SRE", parameters=(int,))
+    @Command(command="*SRE", parameters=(BYTE_MASK,))
     def sre(self, mask):
         """Set the SRE register."""
         self.service_enab = mask
@@ -571,10 +629,11 @@ class SCPI(Instrument):
 
     @Command(command="*STB?")
     def stbq(self):
-        """Implement a dummy *STB?"""
+        """Report the currently derived status byte."""
+        self._update_status_byte()
         print(self.stb)
 
-    @Command(command="*TST")
+    @Command(command="*TST?")
     def self_test(self):
         """Really a NOP !"""
         print(0)
@@ -617,7 +676,7 @@ class SCPI(Instrument):
     def scpi_oper_enabq(self):
         print(self.oper_enab)
 
-    @Command(command="STATus:OPERation:ENABle", parameters=(int,))
+    @Command(command="STATus:OPERation:ENABle", parameters=(STATUS_MASK,))
     def scpi_oper_enab(self, value):
         self.oper_enab = value
 
@@ -633,13 +692,18 @@ class SCPI(Instrument):
     def scpi_ques_enabq(self):
         print(self.ques_enab)
 
-    @Command(command="STATus:QUEStionable:ENABle", parameters=(int,))
+    @Command(command="STATus:QUEStionable:ENABle", parameters=(STATUS_MASK,))
     def scpi_ques_enab(self, value):
         self.ques_enab = value
 
     @Command(command="STATus:PRESet")
     def status_preset(self):
-        self.reset()
+        """Preset only the device status subsystem; do not reset the device."""
+        self._oper_enab = 0
+        self._ques_enab = 0
+        self._oper_event = 0
+        self._ques_event = 0
+        self._update_status_byte()
 
 
 @BuildCommands

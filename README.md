@@ -46,7 +46,7 @@ This code is really very experimental! It's not extensively tested and is probab
 # Disclaimer
 
 The full SCPI specification is fairly detailed and has a number of features that are not widely used in real world instruments.
-This code implements most of the common requirements however.
+This code implements a limited, tested subset rather than claiming complete SCPI-1999 or IEEE 488.2 conformance.
 
 Specifically, it supports the common '\*' required IEEE488.2 commands. It supports long and short forms of device dependent
 commands and optional nodes and optional numeric suffixes. Commands can be concatendated with semi-colons and device
@@ -69,7 +69,8 @@ by providing parameter conversion functions that were aware of either. The provi
 
 The bulk of the work of mapping SCPI commands to python methods is done by the two decorators: @BuildCommands and @Command.
 
-The SCPI class defines the minimum set of commands needed for compliance with the SCPI-1999 standard, the main machinery
+The SCPI class defines the framework's supported common-command and status subset, documented in
+[`STATUS_MODEL.md`](STATUS_MODEL.md). The main machinery
 is handles by the Instrument class. This has an async run_commands() method that runs the main loop, collecting input
 from sys.stdin via an async ainput() method and then passing the resultant string to the parse_cmd() method that is
 responsible for extracting any parameters and then attemptoing to map the SCPI command string to a method. If the
@@ -146,6 +147,14 @@ safe.
 The repository `main.py` demonstrates a single-session lifecycle. The ADC current source starts disabled, failures are
 preserved in `LAST_BOOT_ERROR` without printing into SCPI output, and no automatic restart occurs. A board application
 that opts into restart should add an explicit delayed policy around `main()`.
+
+## Status behavior
+
+The tested status flow is condition to positive-transition event latch to enable mask to status-byte summary to
+service request. `*ESR?` and device event queries are read-and-clear; `*CLS` clears latches and errors without changing
+conditions or enable masks; `STATus:PRESet` affects only the operation/questionable status subsystem; and self-test is
+the query `*TST?`. Mask widths and the reserved SRE bit are validated explicitly. See
+[`STATUS_MODEL.md`](STATUS_MODEL.md) for the precise behavior and exclusions.
 
 The parser will handle arguments being passed to commands. At present it cannot handle optional parameters and strings
 that contain , should be " quoted ". The parameters parameter takes a tuple of callabel functions which will be used to

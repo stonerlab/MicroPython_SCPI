@@ -3,7 +3,7 @@ __all__ = ["BuildCommands", "Command", "SYNC", "BACKGROUND", "AWAITED", "prep_pl
 from copy import deepcopy
 import re
 
-from .exceptions import TooFewParameters, TooManyParameters, DataTypeError, CommandSyntaxError
+from .exceptions import CommandSyntaxError, DataTypeError, SCPIError, TooFewParameters, TooManyParameters
 
 
 # Named execution modes.  The integer values preserve the public async_call=0/1/2
@@ -214,7 +214,7 @@ class Executable(object):
                     plist[ix] = Boolean(arg)
                 else:
                     plist[ix] = param(arg)
-            except DataTypeError:
+            except SCPIError:
                 raise
             except (TypeError, ValueError):
                 raise DataTypeError
