@@ -4,10 +4,11 @@
 Traditional scientific instruments can be programmed through sening ASCII strings over a command bus such as TS232 or
 GPIB. This micropython package makes it easier to implement command style codes for microcontrollers. In particular it
 implements classes that can conform (broadly) to the SCPI-99 standard."""
-__all__ = ["Instrument", "SCPI", "TestInstrument", "BuildCommands", "Command", "SYNC", "BACKGROUND", "AWAITED", "ErrorQueue", "Int", "Float", "Enum", "Boolean", "OnOffFloat", "isnan", "__version__", "__versioninfo__"]
+__all__ = ["Instrument", "SCPI", "TestInstrument", "BuildCommands", "Command", "SYNC", "BACKGROUND", "AWAITED", "ErrorQueue", "Transport", "StreamTransport", "StdioTransport", "UARTTransport", "MemoryTransport", "Int", "Float", "Enum", "Boolean", "OnOffFloat", "isnan", "__version__", "__versioninfo__"]
 
 from .scpi import Instrument, TestInstrument, SCPI
 from .error_queue import ErrorQueue
+from .transport import MemoryTransport, StdioTransport, StreamTransport, Transport, UARTTransport
 from .decorators import AWAITED, BACKGROUND, SYNC, BuildCommands, Command
 from .types import Int, Float, Enum, Boolean, OnOffFloat, isnan
 

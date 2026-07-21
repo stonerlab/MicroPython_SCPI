@@ -383,6 +383,19 @@ Change set 3 was implemented on 2026-07-21. The supported subset is defined in `
 
 The cumulative host result after change set 3 is `94 passed, 1 xfailed`. The expected failure remains the staged F-15 collision test. Pico smoke testing remains outstanding.
 
+Change set 4 was implemented on 2026-07-21. Host transport and response-boundary coverage now verifies F-13:
+
+- `Transport` defines allocation-light `readline()`, `write_response()`, and `close()` operations;
+- `StdioTransport` preserves the default USB/stdin `Instrument.run()` path, `StreamTransport` supports async text/byte streams, and `UARTTransport` demonstrates a polling MicroPython hardware adapter;
+- `MemoryTransport` provides deterministic command sessions and exact framed-response assertions;
+- built-in SCPI, ADC1220, and LED query handlers return values rather than printing;
+- the dispatcher owns scalar/boolean/byte serialization, removes duplicate line endings, and locks every response write;
+- awaited query responses remain ordered, background queries are rejected before execution, and non-query return values produce no response;
+- diagnostic callbacks and background framework commands do not write to the response transport;
+- `legacy_print_handlers=True` provides an explicit stdio-only migration path without redirecting global stdout.
+
+The cumulative host result after change set 4 is `106 passed, 1 xfailed`. The expected failure remains the staged F-15 collision test. Pico hardware smoke testing remains outstanding.
+
 ## Recommended implementation sequence
 
 Keep changes reviewable and independently releasable.

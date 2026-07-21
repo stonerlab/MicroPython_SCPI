@@ -39,7 +39,7 @@ class LED(TestInstrument):
 
     @Command(command="OUTput[0][:LEVeL]?")
     def read_level(self):
-        print(f"{self.level[0]:.1f}%")
+        return f"{self.level[0]:.1f}%"
 
     @Command(command="OUTput[0]:FREQuerncy", parameters=(Int(min=10, max=1_000_000, default=10_000),))
     def set_freq(self, freq):
@@ -47,7 +47,7 @@ class LED(TestInstrument):
 
     @Command(command="OUTput[0]:FREQuency?")
     def read_freq(self):
-        print(self.pwm[0].freq())
+        return self.pwm[0].freq()
 
     @Command(command="OUTput1[:LEVeL]", parameters=(OnOffFloat,))
     def set_level1(self, level):
@@ -55,7 +55,7 @@ class LED(TestInstrument):
 
     @Command(command="OUTput1[:LEVeL]?")
     def read_level1(self):
-        print(f"{self.level[1]:.1f}%")
+        return f"{self.level[1]:.1f}%"
 
     @Command(command="OUTput1:FREQuerncy", parameters=(Int(min=10, max=1_000_000, default=10_000),))
     def set_freq1(self, freq):
@@ -63,7 +63,7 @@ class LED(TestInstrument):
 
     @Command(command="OUTput1:FREQuency?")
     def read_freq1(self):
-        print(self.pwm[1].freq())
+        return self.pwm[1].freq()
 
     @Command(command="OUTput2[:LEVeL]", parameters=(OnOffFloat,))
     def set_level2(self, level):
@@ -71,7 +71,7 @@ class LED(TestInstrument):
 
     @Command(command="OUTput2[:LEVeL]?")
     def read_level2(self):
-        print(f"{self.level[2]:.1f}%")
+        return f"{self.level[2]:.1f}%"
 
     @Command(command="OUTput2:FREQuerncy", parameters=(Int(min=10, max=1_000_000, default=10_000),))
     def set_freq2(self, freq):
@@ -79,7 +79,7 @@ class LED(TestInstrument):
 
     @Command(command="OUTput2:FREQuency?")
     def read_freq2(self):
-        print(self.pwm[2].freq())
+        return self.pwm[2].freq()
 
     @Command(command="OUTput:ALL[:LEVeL]", parameters=(OnOffFloat,))
     def set_all_level(self, level):

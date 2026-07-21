@@ -19,23 +19,23 @@ for more details.
 A simple example:
 
     import uasyncio as asyncio
-    from instr import BACKGROUND, SCPI, Command, BuildCommands
+    from instr import AWAITED, SCPI, Command, BuildCommands
 
     @BuildCommands
     class MyInstr(SCPI):
 
         """A trivial example."""
 
-        @Command(command="SYSTem:EXAMple[:ECHO]", async_call=BACKGROUND, parameters=(str,))
+        @Command(command="SYSTem:EXAMple[:ECHO]?", async_call=AWAITED, parameters=(str,))
         async def example(self, string):
             """An example method."""
             await asyncio.sleep(10)
-            print(string)
+            return string
 
     if __name__ == "__main__":
         MyInstr().run()
 
-This adds a new SCPI command SYST:EXAM str - or SYSTEM:EXAMPLE str or SYST:EXAM:ECHO str or SYSTEM:EXAMPLE:ECHO str
+This adds a new SCPI query SYST:EXAM? str - or SYSTEM:EXAMPLE? str or SYST:EXAM:ECHO? str or SYSTEM:EXAMPLE:ECHO? str
 that will sleep for 10 seconds and then simply echo its parameter back to the user. If the code is exectured as the top level file (e.g. by being saved as `main.py`, it will execute the instrument loop. As well as implementing the 
 SYST:EXAM etc commands, it also implements the standard IEEE488.2 *IDN?, *RST etc commands and a SCPI commands related to operational condition registers and an error message queue - as required by the SCPI-99 Specification.
 
@@ -70,9 +70,8 @@ by providing parameter conversion functions that were aware of either. The provi
 The bulk of the work of mapping SCPI commands to python methods is done by the two decorators: @BuildCommands and @Command.
 
 The SCPI class defines the framework's supported common-command and status subset, documented in
-[`STATUS_MODEL.md`](STATUS_MODEL.md). The main machinery
-is handles by the Instrument class. This has an async run_commands() method that runs the main loop, collecting input
-from sys.stdin via an async ainput() method and then passing the resultant string to the parse_cmd() method that is
+[`STATUS_MODEL.md`](STATUS_MODEL.md). The main machinery is handled by the Instrument class. Its async command loop
+collects input from a transport and passes each line to the parse_cmd() method that is
 responsible for extracting any parameters and then attemptoing to map the SCPI command string to a method. If the
 command doesn't start with a : or * then the search starts at the last command_map dictionary tried - thus supporting
 the SCPI standard for by passing a long traversal of the command tree for adjacent commands. Note the parse_cmd() method
@@ -82,6 +81,8 @@ Once the parse_cmd() method passes back to the run_commands() method, run_comman
 attribute to return the Executable instance. This instance provides the prep_parameters() method that transforms the
 string parameters to the correct native Python types. After this the async_Call attribute of the Executable instance is
 inspected to dtermine the calling method (async task, async blocking or synchronous) and the method is dispatched.
+For queries, the returned scalar or string is serialized by the dispatcher and written as exactly one terminated
+response through the active transport. Non-query return values are ignored.
 
 The SCPIError exception (and subclasses) is used to flag parsing and command execution errors. They are caught at the
 command boundary and added to a bounded FIFO `error_q`. This queue is depleted by `SYST:ERROR:NEXT?`; its state updates
@@ -119,6 +120,7 @@ operations are all finshed.
 
 Async execution modes must return an awaitable. Conversely, a synchronous command that returns an awaitable is rejected
 with a controlled execution error so a coroutine cannot be silently dropped.
+Queries cannot use `BACKGROUND`, because that could reorder their responses; use `AWAITED` for asynchronous queries.
 
 ## Compatibility notes for the converter/dispatch fixes
 
@@ -155,6 +157,30 @@ service request. `*ESR?` and device event queries are read-and-clear; `*CLS` cle
 conditions or enable masks; `STATus:PRESet` affects only the operation/questionable status subsystem; and self-test is
 the query `*TST?`. Mask widths and the reserved SRE bit are validated explicitly. See
 [`STATUS_MODEL.md`](STATUS_MODEL.md) for the precise behavior and exclusions.
+
+## Transports and query responses
+
+`Transport` defines three async methods: `readline()`, `write_response(text)`, and `close()`. `Instrument.run()` uses
+`StdioTransport` by default, preserving the USB serial/stdin workflow. A transport can instead be supplied to the
+instrument constructor:
+
+    from instr import SCPI, UARTTransport
+    from machine import UART
+
+    instrument = SCPI(transport=UARTTransport(UART(0, baudrate=115200)))
+    instrument.run()
+
+`StreamTransport` adapts asynchronous byte or text reader/writer pairs, including TCP-style streams.
+`MemoryTransport` provides deterministic host-side sessions and records fully framed responses.
+
+Query handlers should return a scalar or string. The dispatcher converts booleans to `0`/`1`, strips any handler-supplied
+line ending, adds the transport terminator once, and serializes writes with a lock. Built-in SCPI, ADC1220, and LED query
+handlers all use this path; background framework commands no longer print progress into the response stream.
+
+For one compatibility release, an application that still has `print()`-based query handlers can construct its instrument
+with `legacy_print_handlers=True`. In that mode a query returning `None` is assumed to have printed its own response and
+the dispatcher does not add another. This compatibility mode is intended only for the original stdio transport and can
+still interleave global stdout; migrate handlers to returned values before selecting UART/TCP transports.
 
 The parser will handle arguments being passed to commands. At present it cannot handle optional parameters and strings
 that contain , should be " quoted ". The parameters parameter takes a tuple of callabel functions which will be used to

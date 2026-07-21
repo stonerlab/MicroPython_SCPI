@@ -151,18 +151,15 @@ def test_error_queue_updates_status_summary_and_cls_clears_it():
     assert not instrument.stb & 4
 
 
-def test_empty_error_query_uses_scpi_no_error_response(capsys):
-    SCPI().read_error_q()
-    assert capsys.readouterr().out == '0,"No error"\n'
+def test_empty_error_query_uses_scpi_no_error_response():
+    assert SCPI().read_error_q() == '0,"No error"'
 
 
-def test_command_errors_are_fifo(capsys):
+def test_command_errors_are_fifo():
     instrument = SCPI()
     instrument.error_q.append(CommandError)
     instrument.error_q.append(DataTypeError)
-    instrument.read_error_q()
-    instrument.read_error_q()
-    assert capsys.readouterr().out.splitlines() == [
+    assert [instrument.read_error_q(), instrument.read_error_q()] == [
         '-100,"Command Error"',
         '-104,"Data Type Error"',
     ]

@@ -25,7 +25,7 @@ class StatusInstrument(SCPI):
             self.task_cleaned = True
 
 
-def test_standard_event_read_clears_esr_esb_and_service_request(capsys):
+def test_standard_event_read_clears_esr_esb_and_service_request():
     instrument = SCPI()
     instrument.event_enab = 1
     instrument.service_enab = 32
@@ -33,13 +33,11 @@ def test_standard_event_read_clears_esr_esb_and_service_request(capsys):
     assert instrument.stb & 32
     assert instrument.stb & 64
 
-    instrument.esrq()
-    assert capsys.readouterr().out == "1\n"
+    assert instrument.esrq() == 1
     assert instrument.event_reg == 0
     assert not instrument.stb & (32 | 64)
 
-    instrument.esrq()
-    assert capsys.readouterr().out == "0\n"
+    assert instrument.esrq() == 0
 
 
 def test_operation_positive_transition_latches_and_read_clears():
@@ -228,8 +226,7 @@ def test_opc_sets_standard_event_and_summary_after_prior_work():
     assert instrument.stb & 64
 
 
-def test_opc_query_does_not_set_standard_event(capsys):
+def test_opc_query_does_not_set_standard_event():
     instrument = SCPI()
-    run(instrument._dispatch_command(instrument._scpi_opcq, []))
-    assert capsys.readouterr().out == "1\n"
+    assert run(instrument._dispatch_command(instrument._scpi_opcq, [])) == 1
     assert instrument.event_reg == 0

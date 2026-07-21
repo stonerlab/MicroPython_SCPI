@@ -18,6 +18,7 @@ from math import floor, log10
 from .decorators import AWAITED, BACKGROUND, BuildCommands, Command, prep_plist, tokenize
 from .error_queue import ErrorQueue
 from .exceptions import CommandError, CommandExecutionError, SCPIError, TransportClosed
+from .transport import StdioTransport
 from .types import Int
 
 
@@ -30,27 +31,6 @@ def _is_awaitable(value):
     return hasattr(value, "__await__") or value.__class__.__name__ in ("coroutine", "generator")
 
 
-def _new_stdin_reader():
-    """Create one reader for a stdin transport session."""
-    try:
-        return asyncio.StreamReader(sys.stdin)
-    except (TypeError, ValueError):
-        return _SyncStreamReader(sys.stdin)
-
-
-class _SyncStreamReader:
-    """CPython compatibility adapter for a text stream's blocking readline."""
-
-    def __init__(self, stream):
-        self.stream = stream
-
-    async def readline(self):
-        to_thread = getattr(asyncio, "to_thread", None)
-        if to_thread is not None:
-            return await to_thread(self.stream.readline)
-        return self.stream.readline()
-
-
 async def ainput(repl=None, reader=None):
     """Asynchornous input function.
 
@@ -61,13 +41,12 @@ async def ainput(repl=None, reader=None):
         cmd (str): Input string recieved from stdin.
 
     """
-    if reader is None:
-        reader = _new_stdin_reader()
+    transport = StdioTransport(reader=reader)
 
     while True:
         if repl:
             print(repl,end=None)
-        data = await reader.readline()
+        data = await transport.readline()
         if data == b"" or data == "":
             raise TransportClosed
         if isinstance(data, bytes):
@@ -100,6 +79,8 @@ class Instrument(object):
         fail_safe=None,
         diagnostic_handler=None,
         disconnect_handler=None,
+        transport=None,
+        legacy_print_handlers=False,
     ):
         """Initialise some instrument parameters, but do not start the main event loop"""
         self.current_node = None
@@ -114,6 +95,9 @@ class Instrument(object):
         self.disconnect_handler = disconnect_handler
         self.last_diagnostic = None
         self.callback_error = None
+        self.transport = transport
+        self.legacy_print_handlers = legacy_print_handlers
+        self._active_transport = None
 
     def _set_error_summary(self, has_errors):
         self._error_summary = has_errors
@@ -212,7 +196,7 @@ class Instrument(object):
                 self.current_node = read_from
             return read_from.get(cmd, None), plist
 
-    async def read_commands(self, reader=None):
+    async def read_commands(self, reader=None, transport=None):
         """Main event loop for the instrument.
 
         Raises:
@@ -234,13 +218,17 @@ class Instrument(object):
 
             Any SCPIError exceptions that are raised are handled by appending to the errors list for the instrument.
         """
-        if reader is None:
-            reader = _new_stdin_reader()
+        if transport is None:
+            if reader is not None:
+                transport = StdioTransport(reader=reader)
+            else:
+                transport = self.transport or StdioTransport()
+        self._active_transport = transport
         monitor = asyncio.create_task(self._monitor_tasks())
         try:  # Catch KeyBoard Interrupt
             while True:  # Main loop
-                cmd_string = await ainput(reader=reader)
-                await self.process_line(cmd_string)
+                cmd_string = await self._read_command_line(transport)
+                await self.process_line(cmd_string, transport=transport)
         except TransportClosed:
             self._handle_disconnect()
         finally:
@@ -249,8 +237,25 @@ class Instrument(object):
                 await monitor
             except asyncio.CancelledError:
                 pass
+            await transport.close()
+            self._active_transport = None
 
-    async def process_line(self, command_line):
+    async def _read_command_line(self, transport):
+        """Read one non-blank command line from a transport."""
+        while True:
+            data = await transport.readline()
+            if data == b"" or data == "":
+                raise TransportClosed
+            if isinstance(data, bytes):
+                data = data.decode()
+            elif not isinstance(data, str):
+                raise TypeError("transport readline() must return bytes or str")
+            command = data.strip()
+            if command:
+                return command
+            await asyncio.sleep(0)
+
+    async def process_line(self, command_line, transport=None):
         """Process each non-empty program-message unit in one input line."""
         try:
             commands = tokenize(command_line, ";")
@@ -272,14 +277,37 @@ class Instrument(object):
                     raise CommandError
                 cmd_runner = getattr(self, cmd_runner)
                 plist = cmd_runner.prep_parameters(plist)
-                await self._dispatch_command(cmd_runner, plist)
+                if cmd_runner.is_query and cmd_runner.async_call == BACKGROUND:
+                    raise CommandExecutionError("Query commands cannot run in the background")
+                result = await self._dispatch_command(cmd_runner, plist)
+                if cmd_runner.is_query and (result is not None or not self.legacy_print_handlers):
+                    await self._write_response(result, transport)
             except SCPIError as error:
                 self.error_q.append(error)
+            except TransportClosed:
+                raise
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 self._handle_unexpected_exception(getattr(cmd_runner, "name", command), error)
             await self._reap_tasks()
+
+    async def _write_response(self, value, transport=None):
+        """Serialize and frame exactly one query response through a transport."""
+        if isinstance(value, bool):
+            value = int(value)
+        elif isinstance(value, bytes):
+            value = value.decode()
+        if value is None:
+            value = ""
+        response_transport = transport or self._active_transport
+        if response_transport is None:
+            response_transport = StdioTransport()
+        await self.lock.acquire()
+        try:
+            await response_transport.write_response(str(value))
+        finally:
+            self.lock.release()
 
     def _start_task(self, name, awaitable):
         """Create and register a background task in one place."""
@@ -344,7 +372,7 @@ class Instrument(object):
             if cmd_runner.async_call == BACKGROUND:
                 self._start_task(cmd_runner.name, result)
             else:
-                await result
+                return await result
         elif _is_awaitable(result):
             close = getattr(result, "close", None)
             if close is not None:
@@ -352,6 +380,7 @@ class Instrument(object):
             raise CommandExecutionError(
                 f"Command {cmd_runner.name} returned an awaitable in synchronous mode"
             )
+        return result
 
     @staticmethod
     def format(value):
@@ -572,17 +601,17 @@ class SCPI(Instrument):
     @Command(command="*ESE?")
     def eseq(self):
         """Report Standard Event Enable."""
-        print(self.event_enab)
+        return self.event_enab
 
     @Command(command="*ESR?")
     def esrq(self):
         """Read and clear the Standard Event Status Register."""
-        print(self.event_event)
+        return self.event_event
 
     @Command(command="*IDN?")
     def idnq(self):
         """Implements *IDN?"""
-        print(f"Raspberry Pico (MicroPython),{self.__class__.__name__},,{sys.version.split(' ')[2]}:{self.version}")
+        return f"Raspberry Pico (MicroPython),{self.__class__.__name__},,{sys.version.split(' ')[2]}:{self.version}"
 
     @Command(command="*OPC", async_call=BACKGROUND)
     async def opc(self):
@@ -608,7 +637,7 @@ class SCPI(Instrument):
             else:
                 break
             await asyncio.sleep(0.1)
-        print(1)
+        return 1
 
     @Command(command="*RST", async_call=AWAITED)
     async def reset(self):
@@ -625,18 +654,18 @@ class SCPI(Instrument):
 
     @Command(command="*SRE?")
     def sreq(self):
-        print(self.service_enab)
+        return self.service_enab
 
     @Command(command="*STB?")
     def stbq(self):
         """Report the currently derived status byte."""
         self._update_status_byte()
-        print(self.stb)
+        return self.stb
 
     @Command(command="*TST?")
     def self_test(self):
         """Really a NOP !"""
-        print(0)
+        return 0
 
     @Command(command="*WAI", async_call=AWAITED)
     async def wait(self):
@@ -656,25 +685,25 @@ class SCPI(Instrument):
         """Pop the next error message of the queue and report it."""
         if len(self.error_q):
             err = self.error_q.popleft()
-            print(f'{err.code},"{err.message}"')
+            return f'{err.code},"{err.message}"'
         else:
-            print('0,"No error"')
+            return '0,"No error"'
 
     @Command(command="SYSTem:VERSion?")
     def read_version(self):
-        print("1999.1")
+        return "1999.1"
 
     @Command(command="STATus:OPERation[:EVENt]?")
     def scpi_oper_event(self):
-        print(self.oper_event)
+        return self.oper_event
 
     @Command(command="STATus:OPERation:CONDition?")
     def scpi_oper_reg(self):
-        print(self.oper_reg)
+        return self.oper_reg
 
     @Command(command="STATus:OPERation:ENABle?")
     def scpi_oper_enabq(self):
-        print(self.oper_enab)
+        return self.oper_enab
 
     @Command(command="STATus:OPERation:ENABle", parameters=(STATUS_MASK,))
     def scpi_oper_enab(self, value):
@@ -682,15 +711,15 @@ class SCPI(Instrument):
 
     @Command(command="STATus:QUEStionable[:EVENt]?")
     def scpi_ques_event(self):
-        print(self.ques_event)
+        return self.ques_event
 
     @Command(command="STATus:QUEStionable:CONDition?")
     def scpi_ques_reg(self):
-        print(self.ques_reg)
+        return self.ques_reg
 
     @Command(command="STATus:QUEStionable:ENABle?")
     def scpi_ques_enabq(self):
-        print(self.ques_enab)
+        return self.ques_enab
 
     @Command(command="STATus:QUEStionable:ENABle", parameters=(STATUS_MASK,))
     def scpi_ques_enab(self, value):
@@ -713,21 +742,18 @@ class TestInstrument(SCPI):
 
     - SYSTem:SLEEP - Asynchronous sleep command
     - SYSTem:EXIT - Exit the instrument command parser
-    - SYSTem:PRINt - Simple echo the input
-    - SYSTem:DEBUg? - Check running asynch tasks
+    - SYSTem:PRINt - Store a test string without emitting unsolicited output
+    - SYSTem:DEBUg? - Check running async tasks
     """
 
     @Command(command="SYSTem:SLEEP", async_call=BACKGROUND, parameters=(float,))
     async def sleep(self, sleep_time):
-        """Simply sleep for sleep_time seconds then print done."""
+        """Simply sleep for sleep_time seconds as background work."""
         if self.stb & 1:
-            print("Already sleeping!")
             return None
-        print("Sleepy time....")
         self.stb ^= 1
         await asyncio.sleep(sleep_time)
         self.stb ^= 1
-        print("Done")
 
     @Command(command="SYSTem:EXIT")
     def exit_instrument(self):
@@ -735,13 +761,12 @@ class TestInstrument(SCPI):
 
     @Command(command="SYSTem:PRINt", parameters=(str,))
     def print(self, string):
-        """Test command to echo back the input."""
-        print(string)
+        """Store a test string without writing outside the response boundary."""
+        self.last_print = string
 
     @Command(command="SYSTem:DEBUg?")
     def debug_tasks(self):
-        for name, task in self.tasks:
-            print(name, task.done())
+        return ",".join(f"{name}:{int(task.done())}" for name, task in self.tasks)
 
 
 if __name__ == "__main__":

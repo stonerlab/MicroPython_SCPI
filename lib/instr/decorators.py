@@ -191,6 +191,7 @@ class Executable(object):
         self.command = command
         self.parameters = parameters
         self.name = fnc.__name__
+        self.is_query = command.rstrip().endswith("?")
 
     def __call__(self, *args):
         """Actually run the command."""

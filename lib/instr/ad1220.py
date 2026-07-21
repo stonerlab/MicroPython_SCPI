@@ -374,7 +374,8 @@ class ADC1220(TestInstrument):
         self._display.clear()
         self._display.write(f"{code}")
         if output:
-            print(code)
+            return code
+        return None
 
     @Command(command="MEASure:VOLTage?")
     def read_volt(self, output=True):
@@ -384,7 +385,8 @@ class ADC1220(TestInstrument):
         val, lett = self.format(volt)
         self._display.write(f"{val:.2f}{lett}V")
         if output:
-            print(volt)
+            return volt
+        return None
 
     @Command(command="MEASure:HallRESistance?")
     def read_resistance(self, output=True):
@@ -394,7 +396,8 @@ class ADC1220(TestInstrument):
         val, lett = self.format(volt / self.idac_level)
         self._display.write(f"{val:.2f}{lett}Ohm")
         if output:
-            print(volt / self.idac_level)
+            return volt / self.idac_level
+        return None
 
     @Command(command="MEASure[:FieLD]?")
     def read_field(self, output=True):
@@ -405,7 +408,8 @@ class ADC1220(TestInstrument):
         val, lett = self.format(field)
         self._display.write(f"{val:.2f}{lett}T")
         if output:
-            print(field)
+            return field
+        return None
 
     @Command(command="MEASure:TEMPerature?")
     def read_temperature(self, output=True):
@@ -420,15 +424,16 @@ class ADC1220(TestInstrument):
         self._display.clear()
         self._display.write(f"{0.03125*code:.2f}C")
         if output:
-            print(0.03125 * code)
+            return 0.03125 * code
+        return None
 
     @Command(command="MEASure[:FieLD]:CALibration[:LINear]?")
     def read_calibration(self):
-        print(self._calib[0])
+        return self._calib[0]
 
     @Command(command="MEASure[:FieLD]:CALibration:OFFset?")
     def read_calibration_offset(self):
-        print(self._calib[1])
+        return self._calib[1]
 
     @Command(command="MEASure[:FieLD]:CALibration[:LINear]", parameters=(float,))
     def set_calibration(self, value):
@@ -449,7 +454,7 @@ class ADC1220(TestInstrument):
     @Command(command="MEASure[:FieLD]:RANGe?")
     def read_range(self):
         max_f = (2.048 - abs(self._calib[1])) / (self.gain * self._calib[0])
-        print(max_f)
+        return max_f
 
     @Command(command="MEASure[:FieLD]:RANGe", parameters=(Float(min=0, max=inf),))
     def set_range(self, value):
@@ -462,7 +467,7 @@ class ADC1220(TestInstrument):
 
     @Command(command="SOURce[:LEVeL]?")
     def read_source_level(self):
-        print(self.idac_level)
+        return self.idac_level
 
     @Command(command="SOURce[:LEVeL]", parameters=(Float(default=1e-3, min=1e-5, max=1.5e-3, OFF=0),))
     def set_source_level(self, level):
@@ -491,8 +496,8 @@ class ADC1220(TestInstrument):
 
     @Command(command="DISPlay:MODE?")
     def get_display_mode(self):
-        mapping = {"field": "FIELD", "volt": "VOLTAAGE", "temp": "TEMPERATURE", "hres": "HALLRESISTANCE"}
-        print(mapping.get(self._mode, "NONE"))
+        mapping = {"field": "FIELD", "volt": "VOLTAGE", "temp": "TEMPERATURE", "hres": "HALLRESISTANCE"}
+        return mapping.get(self._mode, "NONE")
 
     @Command(command="DISPlay:MESSage", parameters=(str,))
     def set_display_message(self, string):
@@ -500,7 +505,7 @@ class ADC1220(TestInstrument):
 
     @Command(command="DISPlay:MESSage?")
     def get_display_message(self):
-        print(self._display_message)
+        return self._display_message
 
     @Command(command="DISPlay:COLour", parameters=(str,))
     def sef_display_colour(self, colour):
