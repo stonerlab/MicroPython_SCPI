@@ -7,7 +7,7 @@ of the SCPI-99 standard.
 
 TestInstrument is a subclass of SCPI that adds some exit and debugging commands.
 """
-__all__ = ["Instrument", "SCPI", "TestInstrument"]
+__all__ = ["Instrument", "SCPI", "TestInstrument", "ainput"]
 try:  # For micropython <=1.20
     import uasyncio as asyncio
 except ImportError:  # Desktop python or micropython>=1.21
@@ -16,14 +16,37 @@ import sys
 from math import floor, log10
 
 from .decorators import AWAITED, BACKGROUND, BuildCommands, Command, prep_plist, tokenize
-from .exceptions import SCPIError, CommandError, CommandExecutionError
+from .error_queue import ErrorQueue
+from .exceptions import CommandError, CommandExecutionError, SCPIError, TransportClosed
 
 
 def _is_awaitable(value):
     """Portable awaitable check for CPython and MicroPython coroutine objects."""
     return hasattr(value, "__await__") or value.__class__.__name__ in ("coroutine", "generator")
 
-async def ainput(repl=None):
+
+def _new_stdin_reader():
+    """Create one reader for a stdin transport session."""
+    try:
+        return asyncio.StreamReader(sys.stdin)
+    except (TypeError, ValueError):
+        return _SyncStreamReader(sys.stdin)
+
+
+class _SyncStreamReader:
+    """CPython compatibility adapter for a text stream's blocking readline."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    async def readline(self):
+        to_thread = getattr(asyncio, "to_thread", None)
+        if to_thread is not None:
+            return await to_thread(self.stream.readline)
+        return self.stream.readline()
+
+
+async def ainput(repl=None, reader=None):
     """Asynchornous input function.
 
     Args:
@@ -33,17 +56,25 @@ async def ainput(repl=None):
         cmd (str): Input string recieved from stdin.
 
     """
-    cmd = ""
-    reader = asyncio.StreamReader(sys.stdin)
+    if reader is None:
+        reader = _new_stdin_reader()
 
     while True:
         if repl:
             print(repl,end=None)
-        cmd = await reader.readline()
-        cmd = cmd.decode().strip()
-        if cmd != "":
-            break
-    return cmd
+        data = await reader.readline()
+        if data == b"" or data == "":
+            raise TransportClosed
+        if isinstance(data, bytes):
+            data = data.decode()
+        elif not isinstance(data, str):
+            raise TypeError("transport readline() must return bytes or str")
+        cmd = data.strip()
+        if cmd:
+            return cmd
+        # A blank line is recoverable input, not EOF. Yield before retrying so
+        # background task failures can be reaped without a busy loop.
+        await asyncio.sleep(0)
 
 
 class Instrument(object):
@@ -57,21 +88,74 @@ class Instrument(object):
 
     version = "0.0.1"
 
-    def __init__(self, debug=False):
+    def __init__(
+        self,
+        debug=False,
+        error_queue_capacity=16,
+        fail_safe=None,
+        diagnostic_handler=None,
+        disconnect_handler=None,
+    ):
         """Initialise some instrument parameters, but do not start the main event loop"""
         self.current_node = None
-        self.error_q = []
+        self.error_q = ErrorQueue(error_queue_capacity, self._set_error_summary)
         self.tasks = []
         self.lock = asyncio.Lock()
         self.debug = debug
         self.stb = 0
+        self.fail_safe = fail_safe
+        self.diagnostic_handler = diagnostic_handler
+        self.disconnect_handler = disconnect_handler
+        self.last_diagnostic = None
+        self.callback_error = None
+
+    def _set_error_summary(self, has_errors):
+        if has_errors:
+            self.stb |= 4
+        else:
+            self.stb &= ~4
+
+    def set_fail_safe(self, callback):
+        """Register callback(command_name, exception) for unexpected failures."""
+        self.fail_safe = callback
+
+    def set_disconnect_handler(self, callback):
+        """Register a zero-argument callback for transport disconnects."""
+        self.disconnect_handler = callback
+
+    def _call_safely(self, callback, *args):
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception as error:
+            self.callback_error = error
+
+    def _handle_unexpected_exception(self, name, error):
+        self.last_diagnostic = (name, error)
+        self._call_safely(self.fail_safe, name, error)
+        self._call_safely(self.diagnostic_handler, name, error)
+        self.error_q.append(CommandExecutionError)
+
+    def _handle_disconnect(self):
+        if self.disconnect_handler is not None:
+            self._call_safely(self.disconnect_handler)
+        else:
+            self._call_safely(self.fail_safe, "transport", TransportClosed())
 
     def run(self):
         """Fire up the main event loop task for the instrument."""
-        asyncio.run(self.read_commands())
+        asyncio.run(self._run_service())
+
+    async def _run_service(self):
+        try:
+            await self.read_commands()
+        finally:
+            await self._cancel_tasks(include_system=True)
 
     def exit(self):
         """Exit the instrument."""
+        self._call_safely(self.fail_safe, "exit", None)
         for name, task in self.tasks:
             task.cancel()
         sys.exit(self.stb)
@@ -89,6 +173,8 @@ class Instrument(object):
             str: The name of an executable attriobute (i.e. method) to run for this command.
             plist (list of str): The command parameters a a list of strings, dealing with quotes and quoted commas.
         """
+        if not isinstance(command, str) or not command.strip():
+            raise CommandError
         while True:  # We potentially sscan the dictionary multiple times to locale a relative node
             cmd = command  # Restart processing with whole command
             cmd, plist = prep_plist(cmd)  # Get the parameters off the command first
@@ -116,7 +202,7 @@ class Instrument(object):
                 self.current_node = read_from
             return read_from.get(cmd, None), plist
 
-    async def read_commands(self):
+    async def read_commands(self, reader=None):
         """Main event loop for the instrument.
 
         Raises:
@@ -138,27 +224,103 @@ class Instrument(object):
 
             Any SCPIError exceptions that are raised are handled by appending to the errors list for the instrument.
         """
+        if reader is None:
+            reader = _new_stdin_reader()
+        monitor = asyncio.create_task(self._monitor_tasks())
         try:  # Catch KeyBoard Interrupt
             while True:  # Main loop
-                cmd_String = await ainput()
-                for cmd in tokenize(cmd_String, ";"):  # Deal with multiple commands
-                    try:
-                        cmd_runner, plist = self.parse_cmd(cmd)
-                        if isinstance(cmd_runner, dict):
-                            cmd_runner = cmd_runner.get("_", None)
-                        if cmd_runner is None:
-                            raise CommandError
-                        cmd_runner = getattr(self, cmd_runner)
-                        plist = cmd_runner.prep_parameters(plist)
-                        await self._dispatch_command(cmd_runner, plist)
-                        done = list(reversed([ix for ix, task in enumerate(self.tasks) if task[1].done()]))
-                        for ix in done:  # Dead task collection
-                            del self.tasks[ix]
-                    except SCPIError as e:  # Catch Instrument errors and append to the error queue
-                        self.error_q.append(e)
-                        continue
-        except KeyboardInterrupt:
-            self.exit()
+                cmd_string = await ainput(reader=reader)
+                await self.process_line(cmd_string)
+        except TransportClosed:
+            self._handle_disconnect()
+        finally:
+            monitor.cancel()
+            try:
+                await monitor
+            except asyncio.CancelledError:
+                pass
+
+    async def process_line(self, command_line):
+        """Process each non-empty program-message unit in one input line."""
+        try:
+            commands = tokenize(command_line, ";")
+        except SCPIError as error:
+            self.error_q.append(error)
+            return
+        except Exception as error:
+            self._handle_unexpected_exception("parser", error)
+            return
+        for command in commands:
+            if not command.strip():
+                continue
+            cmd_runner = None
+            try:
+                cmd_runner, plist = self.parse_cmd(command)
+                if isinstance(cmd_runner, dict):
+                    cmd_runner = cmd_runner.get("_", None)
+                if cmd_runner is None:
+                    raise CommandError
+                cmd_runner = getattr(self, cmd_runner)
+                plist = cmd_runner.prep_parameters(plist)
+                await self._dispatch_command(cmd_runner, plist)
+            except SCPIError as error:
+                self.error_q.append(error)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._handle_unexpected_exception(getattr(cmd_runner, "name", command), error)
+            await self._reap_tasks()
+
+    def _start_task(self, name, awaitable):
+        """Create and register a background task in one place."""
+        task = asyncio.create_task(awaitable)
+        self.tasks.append((name, task))
+        return task
+
+    async def _monitor_tasks(self):
+        """Reap completed background work even while command input is idle."""
+        while True:
+            await asyncio.sleep(0.01)
+            await self._reap_tasks()
+
+    async def _reap_tasks(self):
+        """Retrieve results for every completed task exactly once."""
+        completed = [entry for entry in self.tasks if entry[1].done()]
+        if not completed:
+            return
+        self.tasks = [entry for entry in self.tasks if not entry[1].done()]
+        for name, task in completed:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except SCPIError as error:
+                self.error_q.append(error)
+            except Exception as error:
+                self._handle_unexpected_exception(name, error)
+
+    async def _cancel_tasks(self, include_system=False):
+        """Cancel selected tasks and retrieve their terminal results."""
+        selected = [
+            (name, task)
+            for name, task in self.tasks
+            if include_system or not name.startswith("_")
+        ]
+        selected_tasks = [task for _, task in selected]
+        self.tasks = [entry for entry in self.tasks if entry[1] not in selected_tasks]
+        for _, task in selected:
+            if not task.done():
+                task.cancel()
+        for name, task in selected:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except SCPIError as error:
+                self.error_q.append(error)
+            except Exception as error:
+                self._handle_unexpected_exception(name, error)
+        await self._reap_tasks()
 
     async def _dispatch_command(self, cmd_runner, plist):
         """Execute one prepared command according to its declared execution mode."""
@@ -170,7 +332,7 @@ class Instrument(object):
                     f"Command {cmd_runner.name} did not return an awaitable"
                 )
             if cmd_runner.async_call == BACKGROUND:
-                self.tasks.append((cmd_runner.name, asyncio.create_task(result)))
+                self._start_task(cmd_runner.name, result)
             else:
                 await result
         elif _is_awaitable(result):
@@ -323,7 +485,7 @@ class SCPI(Instrument):
         if self.service_enab & 32:
             self.stb |= 64
 
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, **kwargs):
         """Initialise our registeres and other state."""
         self.stb = 0
         self._oper_reg = 0
@@ -336,12 +498,12 @@ class SCPI(Instrument):
         self.event_enab = 0
         self._event_event = 0
         self.service_enab = 0
-        super().__init__(debug)
+        super().__init__(debug, **kwargs)
 
     @Command(command="*CLS")
     def cls(self):
         """Clear status registers and error queue."""
-        self.error_q = []
+        self.error_q.clear()
         self.stb = 0
         self.ques_reg = 0
         self.oper_reg = 0
@@ -392,13 +554,10 @@ class SCPI(Instrument):
             await asyncio.sleep(0.1)
         print(1)
 
-    @Command(command="*RST")
-    def reset(self):
+    @Command(command="*RST", async_call=AWAITED)
+    async def reset(self):
         """This needs to be overriden to actually do the reset."""
-        for name, task in self.tasks:
-            if not name.startswith("_"):  # Cancel non system tasks
-                task.cancel()
-        self.tasks = [x for x in self.tasks if x[0].startswith("_")]  # remove non system tasks
+        await self._cancel_tasks()
         self.cls()
 
     @Command(command="*SRE", parameters=(int,))
@@ -413,10 +572,6 @@ class SCPI(Instrument):
     @Command(command="*STB?")
     def stbq(self):
         """Implement a dummy *STB?"""
-        if len(self.error_q):
-            self.stb |= 4
-        else:
-            self.stb &= 251
         print(self.stb)
 
     @Command(command="*TST")
@@ -441,10 +596,10 @@ class SCPI(Instrument):
     def read_error_q(self):
         """Pop the next error message of the queue and report it."""
         if len(self.error_q):
-            err = self.error_q.pop()
+            err = self.error_q.popleft()
+            print(f'{err.code},"{err.message}"')
         else:
-            err = SCPIError
-        print(f"{err.code},{err.message}")
+            print('0,"No error"')
 
     @Command(command="SYSTem:VERSion?")
     def read_version(self):

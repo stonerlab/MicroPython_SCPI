@@ -357,6 +357,18 @@ Change set 1 was implemented against the pinned baseline on 2026-07-21. Host reg
 
 The host result for this change set is `54 passed, 1 xfailed`. The expected failure is the deliberately staged F-15 collision test. Pico smoke testing remains outstanding.
 
+Change set 2 was implemented on 2026-07-21. Host regression coverage now verifies:
+
+- F-02: background tasks are created and reaped centrally; successful, failed, and cancelled results are retrieved exactly once, including multiple and idle-time completions;
+- F-03: `main.py` uses a single explicit lifecycle, starts the ADC current source disabled, invokes safe shutdown, preserves boot/shutdown diagnostics, and has no implicit restart loop;
+- F-04: one reader is reused per session, byte and text input are supported, blank input yields, EOF raises `TransportClosed`, and repeated sessions do not leak readers or tasks;
+- F-09: errors use a configurable bounded FIFO with a `-350,"Queue overflow"` marker, `*CLS` clearing, the exact empty response `0,"No error"`, and automatic error-summary status updates;
+- F-10: unexpected synchronous, awaited, and background failures are contained at the command boundary, invoke fail-safe/diagnostic hooks, and enqueue one execution error without catching process-control exceptions;
+- F-11: empty program-message units are ignored consistently before parsing, including leading, trailing, repeated, empty, and whitespace-only forms;
+- reset/shutdown task cancellation now waits for task cleanup and retrieves terminal results.
+
+The cumulative host result after change set 2 is `83 passed, 1 xfailed`. The expected failure remains the staged F-15 collision test. Pico smoke testing remains outstanding.
+
 ## Recommended implementation sequence
 
 Keep changes reviewable and independently releasable.

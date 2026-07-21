@@ -314,7 +314,9 @@ class ADC1220(TestInstrument):
         self.filter = 2
         self.idac1_mux = 1
         self.idac2_mux = 0
-        self.idac_level = 1e-3
+        # Leave the external current source disabled after boot. Applications
+        # must explicitly enable it once their own safety checks have passed.
+        self.idac_level = 0
 
     async def _display_measurement(self):
         """Show the current measurement on the display."""

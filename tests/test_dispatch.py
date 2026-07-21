@@ -77,6 +77,7 @@ def test_async_handler_default_is_inferred_as_background():
 def test_builtin_async_handlers_have_explicit_modes():
     assert SCPI._scpi_opc.async_call == BACKGROUND
     assert SCPI._scpi_opcq.async_call == AWAITED
+    assert SCPI._scpi_reset.async_call == AWAITED
     assert SCPI._scpi_wait.async_call == AWAITED
     assert FrameworkTestInstrument._scpi_sleep.async_call == BACKGROUND
 

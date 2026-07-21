@@ -82,13 +82,15 @@ attribute to return the Executable instance. This instance provides the prep_par
 string parameters to the correct native Python types. After this the async_Call attribute of the Executable instance is
 inspected to dtermine the calling method (async task, async blocking or synchronous) and the method is dispatched.
 
-The SCPIError exception (and subclasses) is used to flag parsing errors and also command execution errors and are
-trapped within the the run_commands() method and appened to an error_q attribute. This attribute is depleted by the
-SYST:ERROR:NEXT? command and the status byte error bit is set.
+The SCPIError exception (and subclasses) is used to flag parsing and command execution errors. They are caught at the
+command boundary and added to a bounded FIFO `error_q`. This queue is depleted by `SYST:ERROR:NEXT?`; its state updates
+the status-byte error summary bit.
 
-Async tasks are appeneded as a tuple of command method, task to Instrument.tasks. This list is scanned looking for
-completed tasks that can be deleted and is also used by status commands such as *OPC? to determine when all running
-tasks have completed. Finally *RST will cancel all running tasks before clearing the registers.
+Async tasks are created by `_start_task()` and completed by `_reap_tasks()`, which always retrieves the task result.
+Expected SCPI failures enter the queue directly; unexpected failures invoke the configured fail-safe and diagnostic
+hooks before one execution error is queued. A lightweight monitor performs this cleanup even while command input is
+idle. Status commands such as `*OPC?` use the task list to determine when work has completed. `*RST` cancels and awaits
+non-system tasks before clearing the registers.
 
 ## @Command Decorator
 
@@ -123,6 +125,27 @@ with a controlled execution error so a coroutine cannot be silently dropped.
 - `Int` and `Float` enforce integer-valued bounds as well as floating-point bounds; boolean and invalid bounds are rejected at construction.
 - `Enum` keyword arguments are now label-to-value mappings, for example `Enum(POWer="power")`. Applications written around the former reversed behavior must swap their keyword names and values.
 - Async handlers should declare `BACKGROUND` or `AWAITED` explicitly for portability to MicroPython runtimes that cannot identify coroutine functions reliably.
+- `SCPI.reset()` is now awaited so task cancellation can finish before `*RST` completes. Overrides must therefore be async and should await `super().reset()`.
+
+## Runtime safety and lifecycle
+
+`Instrument` accepts optional `fail_safe`, `diagnostic_handler`, and `disconnect_handler` callbacks. A fail-safe callback
+has the signature `(command_name, exception)` and should disable hazardous outputs. A diagnostic callback has the same
+signature and must write only to a separate diagnostic sink, never the SCPI response stream. The disconnect callback is
+zero-argument. Callbacks can also be installed later with `set_fail_safe()` and `set_disconnect_handler()`.
+
+The error queue defaults to 16 entries and can be configured with `error_queue_capacity`. It is oldest-first. If it
+fills, the newest slot becomes `-350,"Queue overflow"`; subsequent errors are discarded until the host drains space.
+An empty `SYSTem:ERRor[:NEXT]?` returns `0,"No error"`.
+
+Blank and whitespace-only input lines are ignored. EOF raises the distinct `TransportClosed` condition internally,
+runs the disconnect policy, and ends that transport session. Reconnection is deliberately owned by the application or
+transport layer. Empty semicolon-separated units are also ignored, so leading, trailing, and repeated semicolons are
+safe.
+
+The repository `main.py` demonstrates a single-session lifecycle. The ADC current source starts disabled, failures are
+preserved in `LAST_BOOT_ERROR` without printing into SCPI output, and no automatic restart occurs. A board application
+that opts into restart should add an explicit delayed policy around `main()`.
 
 The parser will handle arguments being passed to commands. At present it cannot handle optional parameters and strings
 that contain , should be " quoted ". The parameters parameter takes a tuple of callabel functions which will be used to

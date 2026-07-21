@@ -9,6 +9,8 @@ __all__ = [
     "InstrumentBusy",
     "ParameterDataOutOfRange",
     "CommandExecutionError",
+    "QueueOverflow",
+    "TransportClosed",
 ]
 
 
@@ -50,6 +52,15 @@ class InstrumentBusy(SCPIError):
 class CommandExecutionError(SCPIError):
     code = -200
     message = "Execution error"
+
+
+class QueueOverflow(SCPIError):
+    code = -350
+    message = "Queue overflow"
+
+
+class TransportClosed(EOFError):
+    """Raised when a command transport reaches end-of-file or disconnects."""
 
 
 class ParameterDataOutOfRange(SCPIError):
